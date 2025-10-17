@@ -1,0 +1,1018 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE muclient>
+<muclient>
+  <plugin
+    name="Erion_Text_Mapper"
+    author="Xalles"
+    id="6572696F6E5F746578745F6D"
+    language="Lua"
+    purpose="Text-based map builder for Erion (no GMCP)"
+    date_written="2025-10-14"
+    requires="4.59"
+    version="1.6"
+    save_state="y"
+  >
+    <description trim="y"><![CDATA[
+================================================================================
+                        ERION MAPPER - COMMAND REFERENCE
+================================================================================
+
+NAVIGATION:
+  mapper find [name]          Search for rooms by name
+  mapper goto [uid]           Walk to a specific room by UID
+  mapper goto #[n]            Walk to result #n from last find
+  mapper thisroom             Show current room info
+
+DISPLAY:
+  mapper show                 Show the mapper window
+  mapper hide                 Hide the mapper window
+
+CUSTOM EXITS:
+  mapper cexit add [cmd]      Add a custom exit command
+  mapper cexits here          Show custom exits in current room
+  mapper cexits list          Show all custom exits in current area
+  mapper cexit delete [cmd]   Delete a custom exit from current room
+
+AREA MANAGEMENT:
+  mapper list areas           Show all areas with room counts
+  mapper area log on/off      Toggle area capture logging
+
+DATA CLEANUP:
+  mapper delete room [uid]    Delete a specific room by UID
+  mapper delete area [name]   Delete all rooms in an area
+  mapper check path           Check exits from current room
+
+DEBUG AND MAINTENANCE:
+  mapper debug on/off         Toggle debug messages
+  mapper save                 Manually save map to file
+  mapper database             Show database info
+
+FILE STORAGE:
+  Map saved to: erion_map.lua in your world folder
+
+TIPS:
+  - Areas update automatically from room headers
+  - Use mapper find then click results to walk there
+  - Delete problem areas and re-explore for clean mapping
+  - Use mapper check path to diagnose broken exits
+  - Custom exits support commands like enter portal
+
+================================================================================
+]]></description>
+  </plugin>
+
+  <aliases>
+    <alias match="mapper database" enabled="y" script="get_database" sequence="100" />
+    <alias match="mapper show" enabled="y" sequence="100" send_to="12">
+      <send>
+        window_hidden = false
+        if mapper and mapper.show then mapper.show() end
+      </send>
+    </alias>
+    <alias match="mapper hide" enabled="y" sequence="100" send_to="12">
+      <send>
+        window_hidden = true
+        if mapper and mapper.hide then mapper.hide() end
+      </send>
+    </alias>
+    <alias match="mapper thisroom" enabled="y" sequence="100" script="show_this_room" regexp="n" />
+    
+    <alias match="^mapper debug (on|off)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send>
+        if "%1" == "on" then
+          mapper_debug = true
+          Note("Mapper debug: ON")
+        else
+          mapper_debug = false
+          Note("Mapper debug: OFF")
+        end
+      </send>
+    </alias>
+    
+    <alias match="^mapper status$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send>
+        Note("================================================================================")
+        Note("MAPPER STATUS")
+        Note("================================================================================")
+        Note("Current room: " .. tostring(current_room))
+        Note("Debug mode: " .. tostring(mapper_debug))
+        Note("Total rooms: " .. tostring(table_size(rooms)))
+        Note("================================================================================")
+      </send>
+    </alias>
+
+    <alias match="mapper find *" enabled="y" sequence="100" script="map_find" regexp="n" />
+    <alias match="mapper goto *" enabled="y" sequence="100" script="map_goto" regexp="n" />
+    <alias match="^mapper help$" enabled="y" sequence="100" script="mapper_help" regexp="y" />
+  
+    <alias match="mapper cexit add *" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local cmd = Trim("%1")
+        if cmd == "" then
+          Note("Usage: mapper cexit add [command]")
+          return
+        end
+        if not current_room then
+          Note("Custom exit: current room unknown. Try 'look' first.")
+          return
+        end
+        custom_pending = { from = tostring(current_room), cmd = cmd }
+        if mapper_debug then
+          Note(string.format("Mapper DEBUG: cexit armed from %s via [%s]", current_room, cmd))
+        end
+        Send(cmd)
+      ]]></send>
+    </alias>
+    
+    <alias match="^mapper cexits list$" regexp="y" enabled="y" sequence="100" script="list_all_custom_exits" />
+    
+    <alias match="^mapper cexits here$" regexp="y" enabled="y" sequence="100" script="list_custom_exits_here" />
+    
+    <alias match="^mapper cexit delete (.+)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local cmd = Trim("%1")
+        if not current_room then
+          Note("Custom exit: current room unknown.")
+          return
+        end
+        
+        if not rooms[current_room] or not rooms[current_room].exits then
+          Note("No exits in current room.")
+          return
+        end
+        
+        local cmdkey = "cmd:" .. cmd
+        if rooms[current_room].exits[cmdkey] then
+          local dest = rooms[current_room].exits[cmdkey]
+          rooms[current_room].exits[cmdkey] = nil
+          Note(string.format("Deleted custom exit '%s' from room %s", cmd, current_room))
+          __save_rooms_file()
+        else
+          Note(string.format("No custom exit '%s' found in current room", cmd))
+        end
+      ]]></send>
+    </alias>
+
+    <alias match="^mapper area log (on|off)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send>
+        area_verbose = ("%1" == "on")
+        Note("Area logging: " .. (area_verbose and "ON" or "OFF"))
+      </send>
+    </alias>
+    
+    <alias match="^mapper save$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send>
+        if type(__save_rooms_file) == "function" then
+          if __save_rooms_file() then
+            Note("Mapper: Saved " .. tostring(table_size(rooms or {})) .. " rooms to file.")
+          end
+        end
+      </send>
+    </alias>
+    
+    <alias match="^mapper delete room (\d+)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local uid = "%1"
+        if rooms and rooms[uid] then
+          local rname = rooms[uid].name or "unknown"
+          rooms[uid] = nil
+          Note(string.format("Deleted room %s (%s)", rname, uid))
+          -- Also remove this room from all exit references
+          for _, r in pairs(rooms) do
+            if r.exits then
+              for dir, dest in pairs(r.exits) do
+                if dest == uid then
+                  r.exits[dir] = nil
+                end
+              end
+            end
+          end
+          __save_rooms_file()
+        else
+          Note("Room " .. uid .. " not found in database")
+        end
+      ]]></send>
+    </alias>
+    
+    <alias match="^mapper delete area (.+)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local area_name = Trim("%1")
+        local count = 0
+        local deleted_uids = {}
+        
+        -- Delete all rooms in this area
+        for uid, r in pairs(rooms or {}) do
+          if r.area and r.area:lower() == area_name:lower() then
+            deleted_uids[uid] = true
+            rooms[uid] = nil
+            count = count + 1
+          end
+        end
+        
+        -- Clean up exit references to deleted rooms
+        for _, r in pairs(rooms) do
+          if r.exits then
+            for dir, dest in pairs(r.exits) do
+              if deleted_uids[dest] then
+                r.exits[dir] = nil
+              end
+            end
+          end
+        end
+        
+        Note(string.format("Deleted %d rooms from area '%s'", count, area_name))
+        __save_rooms_file()
+      ]]></send>
+    </alias>
+    
+    <alias match="^mapper list areas$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local areas = {}
+        for uid, r in pairs(rooms or {}) do
+          local a = r.area or "erion_unknown"
+          areas[a] = (areas[a] or 0) + 1
+        end
+        
+        local sorted = {}
+        for area, count in pairs(areas) do
+          table.insert(sorted, {name = area, count = count})
+        end
+        table.sort(sorted, function(a,b) return a.count > b.count end)
+        
+        Note("================================================================================")
+        Note("                           MAPPER AREAS")
+        Note("================================================================================")
+        for _, entry in ipairs(sorted) do
+          Note(string.format("  %-50s [%d rooms]", entry.name, entry.count))
+        end
+        Note("================================================================================")
+        Note("Total areas: " .. #sorted)
+      ]]></send>
+    </alias>
+    
+    <alias match="^mapper check path$" regexp="y" enabled="y" sequence="100" script="check_path_integrity" />
+  </aliases>
+
+  <triggers>
+    <!-- Movement direction capture -->
+    <trigger enabled="y" regexp="y" match="^You .* (north|south|east|west|up|down)\.$" send_to="12" sequence="90" omit_from_output="y">
+      <send>
+        last_move_direction = "%1"
+        if mapper_debug then
+          Note(string.format("Mapper DEBUG: Movement -> %s", last_move_direction))
+        end
+      </send>
+    </trigger>
+
+    <!-- Zone/Area banner capture -->
+    <trigger enabled="y" regexp="y" match="^You have passed into (.+)\.$" send_to="12" sequence="92">
+      <send>
+        local zone_name = Trim("%1")
+        pending_area = zone_name
+        if mapper_debug then
+          Note(string.format("Mapper DEBUG: Zone banner detected -> %s", zone_name))
+        end
+      </send>
+    </trigger>
+
+    <!-- PRIMARY ROOM HEADER TRIGGER - Handles BOTH formats -->
+    <trigger enabled="y" regexp="y" match="^(.+?):\s*(.+?)\s*\(Id\s+(\d+)\)\s*$" send_to="12" sequence="100" script="process_room_header">
+    </trigger>
+
+    <!-- FALLBACK: Room without area prefix -->
+    <trigger enabled="y" regexp="y" match="^\s*([^:]+?)\s*\(Id\s*(\d+)\)\s*$" send_to="12" sequence="101" script="process_room_header_no_area">
+    </trigger>
+
+    <!-- Exit list capture -->
+    <trigger enabled="y" regexp="y" match="^%s*%[Exits:%s*(.+)%]%s*$" send_to="12" sequence="95">
+      <send>
+        local raw = Trim("%1")
+        raw = raw:gsub(",", " "):gsub("%s+", " ")
+        raw = Trim(raw)
+        local exits = {}
+        for ex in string.gmatch(raw, "(%S+)") do
+          table.insert(exits, ex)
+        end
+
+        if current_room then
+          rooms = rooms or {}
+          rooms[current_room] = rooms[current_room] or {
+            name = "Room "..current_room,
+            uid = current_room,
+            exits = {},
+            exit_locks = {},
+            area = pending_area or "erion_unknown"
+          }
+          for _,d in ipairs(exits) do
+            rooms[current_room].exits[d] = rooms[current_room].exits[d] or "-1"
+          end
+        end
+      </send>
+    </trigger>
+  </triggers>
+
+  <script>
+  <![CDATA[
+  -- ===== GLOBAL STATE =====
+  area_verbose = area_verbose or false
+  pending_area = pending_area or nil
+  custom_pending = custom_pending or nil
+  mapper_debug = mapper_debug or false
+  rooms = rooms or {}
+  last_room = last_room or nil
+  last_move_direction = last_move_direction or nil
+  current_room = current_room or nil
+
+  function Trim(s)
+    if not s then return "" end
+    return (s:gsub("^%s*(.-)%s*$", "%1"))
+  end
+
+  function table_size(t)
+    local count = 0
+    if type(t) == "table" then
+      for _ in pairs(t) do count = count + 1 end
+    end
+    return count
+  end
+
+  -- ===== ROOM PROCESSING FUNCTIONS =====
+  
+  -- Handles format: "Area: Room Name (Id 12345)"
+  function process_room_header(name, line, wildcards)
+    local area_name = Trim(wildcards[1] or "")
+    local room_name = Trim(wildcards[2] or "")
+    local room_id = Trim(wildcards[3] or "")
+
+    if mapper_debug then
+      Note("================================================================================")
+      Note("Mapper DEBUG: ROOM HEADER DETECTED (with area)")
+      Note("  Raw line: " .. tostring(line))
+      Note("  Area captured: '" .. area_name .. "'")
+      Note("  Room name captured: '" .. room_name .. "'")
+      Note("  Room ID captured: '" .. room_id .. "'")
+      Note("================================================================================")
+    end
+
+    handle_room_entry(room_id, room_name, area_name)
+  end
+
+  -- Handles format: "Room Name (Id 12345)" without area prefix
+  function process_room_header_no_area(name, line, wildcards)
+    local room_name = Trim(wildcards[1] or "")
+    local room_id = Trim(wildcards[2] or "")
+
+    -- Use pending_area from zone banner, or keep existing area
+    local area_to_use = pending_area
+    if not area_to_use and rooms[room_id] then
+      area_to_use = rooms[room_id].area
+    end
+    area_to_use = area_to_use or "erion_unknown"
+
+    if mapper_debug then
+      Note("================================================================================")
+      Note("Mapper DEBUG: ROOM HEADER DETECTED (no area prefix)")
+      Note("  Raw line: " .. tostring(line))
+      Note("  Room name captured: '" .. room_name .. "'")
+      Note("  Room ID captured: '" .. room_id .. "'")
+      Note("  Area being used: '" .. area_to_use .. "'")
+      if pending_area then
+        Note("  (from zone banner)")
+      elseif rooms[room_id] and rooms[room_id].area then
+        Note("  (from existing room data)")
+      else
+        Note("  (defaulting to erion_unknown)")
+      end
+      Note("================================================================================")
+    end
+
+    handle_room_entry(room_id, room_name, area_to_use)
+  end
+
+  -- Core room entry handler - called by both trigger functions
+  function handle_room_entry(room_id, room_name, area_name)
+    current_room = tostring(room_id)
+    rooms = rooms or {}
+    
+    -- Make variables available to display plugin
+    SetVariable("current_room", current_room)
+    
+    -- Handle custom exit if one is pending
+    if custom_pending and custom_pending.from and custom_pending.cmd then
+      local from = tostring(custom_pending.from)
+      local cmdkey = "cmd:" .. custom_pending.cmd
+      
+      rooms[from] = rooms[from] or {
+        name = "",
+        uid = from,
+        exits = {},
+        exit_locks = {},
+        area = area_name
+      }
+      rooms[from].exits = rooms[from].exits or {}
+      rooms[from].exits[cmdkey] = current_room
+      
+      if mapper_debug then
+        Note(string.format("Mapper DEBUG: Custom exit %s --%s--> %s", from, cmdkey, current_room))
+      end
+      custom_pending = nil
+    end
+    
+    -- Create or update room
+    local is_new_room = not rooms[current_room]
+    local old_area = rooms[current_room] and rooms[current_room].area or nil
+    local old_name = rooms[current_room] and rooms[current_room].name or nil
+    
+    if not rooms[current_room] then
+      rooms[current_room] = {
+        name = room_name,
+        uid = current_room,
+        exits = {},
+        exit_locks = {},
+        area = area_name
+      }
+      
+      if mapper_debug or area_verbose then
+        Note("--------------------------------------------------------------------------------")
+        Note("NEW ROOM CREATED:")
+        Note("  Room ID: " .. room_id)
+        Note("  Room Name: '" .. room_name .. "'")
+        Note("  Area: '" .. area_name .. "'")
+        Note("--------------------------------------------------------------------------------")
+      end
+    else
+      rooms[current_room].name = room_name
+      rooms[current_room].area = area_name
+      
+      if mapper_debug or area_verbose then
+        local name_changed = (old_name ~= room_name)
+        local area_changed = (old_area ~= area_name)
+        
+        if name_changed or area_changed then
+          Note("--------------------------------------------------------------------------------")
+          Note("ROOM UPDATED:")
+          Note("  Room ID: " .. room_id)
+          if name_changed then
+            Note("  Name changed: '" .. tostring(old_name) .. "' -> '" .. room_name .. "'")
+          else
+            Note("  Room Name: '" .. room_name .. "'")
+          end
+          if area_changed then
+            Note("  Area changed: '" .. tostring(old_area) .. "' -> '" .. area_name .. "'")
+          else
+            Note("  Area: '" .. area_name .. "'")
+          end
+          Note("--------------------------------------------------------------------------------")
+        elseif mapper_debug then
+          Note(string.format("Mapper DEBUG: Re-entered room %s (%s) in %s", room_name, room_id, area_name))
+        end
+      end
+    end
+
+    -- Link to previous room if we just moved
+    if last_room and last_move_direction and last_room ~= current_room then
+      local rev = { north = "south", south = "north", east = "west", west = "east", up = "down", down = "up" }
+      local dir = last_move_direction
+      local prev = last_room
+
+      rooms[prev] = rooms[prev] or {}
+      rooms[prev].exits = rooms[prev].exits or {}
+      
+      -- Always create bidirectional exits
+      rooms[prev].exits[dir] = current_room
+
+      rooms[current_room].exits = rooms[current_room].exits or {}
+      rooms[current_room].exits[rev[dir] or "unknown"] = prev
+
+      if mapper_debug then
+        local prev_name = rooms[prev] and rooms[prev].name or "unknown"
+        Note(string.format("Mapper DEBUG: EXIT LINK: %s (%s) --%s--> %s (%s) (bidirectional)", 
+          prev_name, prev, dir, room_name, current_room))
+      end
+    end
+
+    last_room = current_room
+    last_move_direction = nil
+    pending_area = nil
+    
+    DoAfterSpecial(0.2, "__save_rooms_file()", sendto.script)
+    
+    -- Trigger visual update
+    if mapper and mapper.draw then 
+      mapper.draw(current_room)
+      if mapper_debug then
+        Note("Mapper DEBUG: Called mapper.draw for room " .. current_room)
+      end
+    end
+  end
+
+  -- ===== UTILITY FUNCTIONS =====
+
+  function show_this_room(name, line, wildcards)
+    if current_room and rooms and rooms[current_room] then
+      local rm = rooms[current_room]
+      local exlist = {}
+      for k,_ in pairs(rm.exits or {}) do table.insert(exlist, k) end
+      table.sort(exlist)
+      Note(string.format("Mapper: at %s (%s), area: %s, exits: %s",
+        rm.name or "unknown", current_room, rm.area or "unknown", table.concat(exlist, ", ")))
+    else
+      Note("Mapper: No current room information available.")
+    end
+  end
+
+  function get_database()
+    Note("Current mapper file: erion_map.lua with " .. tostring(table_size(rooms)) .. " rooms")
+  end
+
+  mapper = mapper or {}
+  if not mapper.draw then
+    function mapper.draw(r)
+      -- Broadcast room change with serialized nearby room data
+      if rooms and r and rooms[r] then
+        if mapper_debug then
+          Note("Mapper DEBUG: Preparing broadcast for room " .. r)
+        end
+        
+        local data = {
+          current = r,
+          room = rooms[r],
+          neighbors = {}
+        }
+        -- Add neighboring rooms
+        for dir, dest_uid in pairs(rooms[r].exits or {}) do
+          if rooms[dest_uid] then
+            data.neighbors[dest_uid] = rooms[dest_uid]
+          end
+        end
+        -- Serialize and broadcast
+        local serialized = serialize(data)
+        
+        if mapper_debug then
+          Note("Mapper DEBUG: Broadcasting data, length: " .. #serialized)
+        end
+        
+        BroadcastPlugin(1, serialized)
+      else
+        if mapper_debug then
+          Note("Mapper DEBUG: Cannot broadcast - missing room data for " .. tostring(r))
+        end
+      end
+    end
+  end
+  
+  function mapper.show()
+    CallPlugin("6572696F6E5F6D61705F6469", "show")
+  end
+  
+  function mapper.hide()
+    CallPlugin("6572696F6E5F6D61705F6469", "hide")
+  end
+  
+  -- Export room data for display plugin
+  function GetMapperRooms()
+    return rooms
+  end
+  
+  function GetCurrentRoom()
+    return current_room
+  end
+
+  function set_mapper_debug(val)
+    mapper_debug = not not val
+    Note("Mapper debug: " .. (mapper_debug and "ON" or "OFF"))
+  end
+  
+  -- Simple serialization for broadcast
+  function serialize(t)
+    local result = "return {"
+    result = result .. "current=" .. string.format("%q", t.current) .. ","
+    result = result .. "room={name=" .. string.format("%q", t.room.name or "") .. ","
+    result = result .. "uid=" .. string.format("%q", t.room.uid or "") .. ","
+    result = result .. "area=" .. string.format("%q", t.room.area or "") .. ","
+    result = result .. "exits={"
+    for dir, dest in pairs(t.room.exits or {}) do
+      result = result .. "[" .. string.format("%q", dir) .. "]=" .. string.format("%q", dest) .. ","
+    end
+    result = result .. "}},"
+    result = result .. "neighbors={"
+    for uid, rm in pairs(t.neighbors or {}) do
+      result = result .. "[" .. string.format("%q", uid) .. "]={name=" .. string.format("%q", rm.name or "") .. ","
+      result = result .. "uid=" .. string.format("%q", rm.uid or "") .. ","
+      result = result .. "area=" .. string.format("%q", rm.area or "") .. ","
+      result = result .. "exits={"
+      for dir, dest in pairs(rm.exits or {}) do
+        result = result .. "[" .. string.format("%q", dir) .. "]=" .. string.format("%q", dest) .. ","
+      end
+      result = result .. "}},"
+    end
+    result = result .. "}}"
+    return result
+  end
+  
+  function check_path_integrity()
+    if not current_room then
+      Note("Current room unknown. Move to a room first.")
+      return
+    end
+    
+    local rm = rooms[current_room]
+    if not rm then
+      Note("Current room not in database.")
+      return
+    end
+    
+    Note("=== Checking exits from " .. rm.name .. " (" .. current_room .. ") ===")
+    local rev = { north = "south", south = "north", east = "west", west = "east", up = "down", down = "up" }
+    
+    for dir, dest_uid in pairs(rm.exits or {}) do
+      if dest_uid ~= "-1" and rooms[dest_uid] then
+        local dest = rooms[dest_uid]
+        local rev_dir = rev[dir]
+        local has_reverse = dest.exits and dest.exits[rev_dir] == current_room
+        
+        local status = has_reverse and "OK" or "MISSING REVERSE"
+        Note(string.format("  %s -> %s (%s) %s", dir, dest.name, dest_uid, status))
+        
+        if not has_reverse and rev_dir then
+          Note(string.format("    Missing: %s should have '%s' back to here", dest_uid, rev_dir))
+        end
+      elseif dest_uid == "-1" then
+        Note(string.format("  %s -> [unexplored]", dir))
+      else
+        Note(string.format("  %s -> %s [BROKEN - room not found]", dir, dest_uid))
+      end
+    end
+  end
+  
+  function list_custom_exits_here()
+    if not current_room then
+      Note("Current room unknown. Move to a room first.")
+      return
+    end
+    
+    local rm = rooms[current_room]
+    if not rm then
+      Note("Current room not in database.")
+      return
+    end
+    
+    local cexits = {}
+    for dir, dest_uid in pairs(rm.exits or {}) do
+      if dir:sub(1, 4) == "cmd:" then
+        local cmd = dir:sub(5)
+        local dest_name = "unknown"
+        if rooms[dest_uid] then
+          dest_name = rooms[dest_uid].name
+        end
+        table.insert(cexits, {cmd = cmd, dest_uid = dest_uid, dest_name = dest_name})
+      end
+    end
+    
+    if #cexits == 0 then
+      Note("No custom exits in current room: " .. rm.name .. " (" .. current_room .. ")")
+      return
+    end
+    
+    Note("================================================================================")
+    Note("Custom exits from: " .. rm.name .. " (" .. current_room .. ")")
+    Note("================================================================================")
+    for _, ex in ipairs(cexits) do
+      Note(string.format("  '%s' -> %s (ID: %s)", ex.cmd, ex.dest_name, ex.dest_uid))
+    end
+    Note("================================================================================")
+  end
+  
+  function list_all_custom_exits()
+    if not current_room then
+      Note("Current room unknown. Move to a room first.")
+      return
+    end
+    
+    local current_area = rooms[current_room] and rooms[current_room].area
+    if not current_area then
+      Note("Current area unknown.")
+      return
+    end
+    
+    local area_cexits = {}
+    local count = 0
+    
+    for uid, rm in pairs(rooms) do
+      if rm.area == current_area then
+        for dir, dest_uid in pairs(rm.exits or {}) do
+          if dir:sub(1, 4) == "cmd:" then
+            local cmd = dir:sub(5)
+            local dest_name = "unknown"
+            if rooms[dest_uid] then
+              dest_name = rooms[dest_uid].name
+            end
+            table.insert(area_cexits, {
+              from_uid = uid,
+              from_name = rm.name,
+              cmd = cmd,
+              dest_uid = dest_uid,
+              dest_name = dest_name
+            })
+            count = count + 1
+          end
+        end
+      end
+    end
+    
+    if count == 0 then
+      Note("No custom exits found in area: " .. current_area)
+      return
+    end
+    
+    -- Sort by room name
+    table.sort(area_cexits, function(a, b)
+      return a.from_name < b.from_name
+    end)
+    
+    Note("================================================================================")
+    Note("Custom exits in area: " .. current_area .. " (" .. count .. " total)")
+    Note("================================================================================")
+    for _, ex in ipairs(area_cexits) do
+      Note(string.format("  [%s] %s", ex.from_uid, ex.from_name))
+      Note(string.format("    '%s' -> %s (ID: %s)", ex.cmd, ex.dest_name, ex.dest_uid))
+    end
+    Note("================================================================================")
+  end
+
+  -- ===== PATHFINDING =====
+
+  mapper_last_results = mapper_last_results or {}
+  local dir_short = { north='n', south='s', east='e', west='w', up='u', down='d' }
+
+  local function path_bfs(start_uid, goal_uid)
+    if not start_uid or not goal_uid or start_uid == goal_uid then return {} end
+    local q = {start_uid}
+    local visited = {[start_uid] = true}
+    local parent = {}
+    while #q > 0 do
+      local cur = table.remove(q, 1)
+      local ex = rooms[cur] and rooms[cur].exits or {}
+      for d,to in pairs(ex) do
+        if to and to ~= "-1" then
+          if not visited[to] then
+            visited[to] = true
+            parent[to] = {prev=cur, dir=d}
+            if to == goal_uid then
+              local rev = {}
+              local t = goal_uid
+              while t and parent[t] do
+                table.insert(rev, 1, parent[t].dir)
+                t = parent[t].prev
+              end
+              return rev
+            end
+            table.insert(q, to)
+          end
+        end
+      end
+    end
+    return nil
+  end
+
+  local function walk_path(dirs)
+    if not dirs or #dirs == 0 then return end
+    
+    -- Simple approach: just send all commands with a small delay
+    for i, d in ipairs(dirs) do
+      local cmd
+      if type(d) == "string" and d:sub(1,4) == "cmd:" then
+        cmd = d:sub(5)
+      else
+        cmd = dir_short[d] or d:sub(1,1)
+      end
+      DoAfterSpecial(0.1 * i, cmd, sendto.world)
+    end
+  end
+
+  function map_find(name, line, wildcards)
+    local phrase = Trim(wildcards[1] or "")
+    if phrase == "" then
+      Note("Usage: mapper find [room name fragment]")
+      return
+    end
+
+    mapper_last_results = {}
+    local count = 0
+    local phrase_lower = phrase:lower()
+
+    for uid, r in pairs(rooms) do
+      if r.name and r.name:lower():find(phrase_lower, 1, true) then
+        count = count + 1
+        table.insert(mapper_last_results, {
+          uid = tostring(uid),
+          name = r.name or '',
+          area = r.area or 'unknown'
+        })
+        if count >= 100 then break end
+      end
+    end
+
+    table.sort(mapper_last_results, function(a,b)
+      return (a.area..a.name..a.uid) < (b.area..b.name..b.uid)
+    end)
+
+    if count == 0 then
+      Note(string.format("No rooms found matching '%s'.", phrase))
+      return
+    end
+
+    Note("+------------------------------ START OF SEARCH -------------------------------+")
+    for i, r in ipairs(mapper_last_results) do
+      local line_text = string.format("[#%d] (%s) %s  -  area: %s", i, r.uid, r.name, r.area)
+      Hyperlink(string.format("mapper goto #%d", i), line_text, "Click to walk here", "", "", false, true)
+      print("")
+      if i >= 100 then break end
+    end
+    Note("+-------------------------------- END OF SEARCH -------------------------------+")
+  end
+
+  function map_goto(name, line, wildcards)
+    local arg = Trim(wildcards[1] or "")
+    if arg == "" then
+      Note("Usage: mapper goto [uid]  OR  mapper goto #[index-from-find]")
+      return
+    end
+
+    local target_uid
+    local idx = arg:match("^#(%d+)$")
+    if idx then
+      idx = tonumber(idx)
+      if mapper_last_results[idx] then
+        target_uid = mapper_last_results[idx].uid
+      else
+        Note(string.format("mapper goto: invalid index #%d.", idx))
+        return
+      end
+    else
+      target_uid = arg
+    end
+
+    if not current_room then
+      Note("mapper goto: current room unknown.")
+      return
+    end
+
+    if not rooms[target_uid] then
+      Note(string.format("No path known to room %s.", target_uid))
+      return
+    end
+
+    local dirs = path_bfs(current_room, target_uid)
+    if not dirs then
+      if target_uid == current_room then
+        Note("mapper goto: already here.")
+      else
+        Note(string.format("No path from %s to %s.", current_room, target_uid))
+      end
+      return
+    end
+
+    if #dirs == 0 then
+      Note("mapper goto: already here.")
+      return
+    end
+
+    Note("Speedwalking: " .. table.concat(dirs, ", "))
+    walk_path(dirs)
+  end
+
+  function mapper_help()
+    -- Display the plugin description which contains the help
+    Note(GetPluginInfo(GetPluginID(), 3))
+  end
+  ]]>
+  </script>
+
+  <script>
+  <![CDATA[
+  -- ===== PERSISTENCE =====
+  local __persist_filename = "erion_map.lua"
+
+  local function __world_dir()
+    local p = GetInfo(66) or ""
+    if p ~= "" and p:sub(-1) ~= "\\" and p:sub(-1) ~= "/" then p = p .. "/" end
+    return p
+  end
+
+  local function __persist_path()
+    return __world_dir() .. __persist_filename
+  end
+
+  local function __esc_str(s)
+    s = tostring(s or "")
+    s = s:gsub("\\", "\\\\"):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub('"', '\\"')
+    return '"' .. s .. '"'
+  end
+
+  local function __serialize_table(t, indent)
+    indent = indent or ""
+    if type(t) ~= "table" then
+      if type(t) == "string" then return __esc_str(t) end
+      if type(t) == "number" or type(t) == "boolean" then return tostring(t) end
+      return "nil"
+    end
+    local parts = {"{"}
+    local first = true
+    for k, v in pairs(t) do
+      local key
+      if type(k) == "string" and k:match("^[_%a][_%w]*$") then
+        key = k .. " = "
+      else
+        key = "[" .. __esc_str(k) .. "] = "
+      end
+      local val = __serialize_table(v, indent .. "  ")
+      table.insert(parts, (first and "" or ",") .. "\n" .. indent .. "  " .. key .. val)
+      first = false
+    end
+    table.insert(parts, (first and "" or "\n" .. indent) .. "}")
+    return table.concat(parts, "")
+  end
+
+  local function __rooms_to_persist()
+    local out = {}
+    if type(rooms) == "table" then
+      for uid, r in pairs(rooms) do
+        out[uid] = {
+          uid = r.uid or tostring(uid),
+          name = r.name or "",
+          area = r.area or "erion_unknown",
+          exits = r.exits or {},
+        }
+      end
+    end
+    return out
+  end
+
+  function __save_rooms_file()
+    local path = __persist_path()
+    local f, e = io.open(path, "w")
+    if not f then
+      Note("Mapper save failed: " .. tostring(e or "unknown error"))
+      return false
+    end
+    local data = { rooms = __rooms_to_persist() }
+    f:write("return ")
+    f:write(__serialize_table(data))
+    f:write("\n")
+    f:close()
+    return true
+  end
+
+  local function __load_rooms_file()
+    local path = __persist_path()
+    local f = io.open(path, "r")
+    if not f then return false end
+    f:close()
+    local chunk, e = loadfile(path)
+    if not chunk then
+      Note("Mapper load failed: " .. tostring(e or "unknown error"))
+      return false
+    end
+    local ok, tbl = pcall(chunk)
+    if not ok or type(tbl) ~= "table" then
+      Note("Mapper load failed: unreadable data")
+      return false
+    end
+    local src = tbl.rooms or {}
+    rooms = rooms or {}
+    for uid, r in pairs(src) do
+      rooms[uid] = rooms[uid] or {
+        uid = uid,
+        name = "",
+        area = "erion_unknown",
+        exits = {},
+        exit_locks = {}
+      }
+      rooms[uid].name = r.name or rooms[uid].name
+      rooms[uid].area = r.area or rooms[uid].area
+      rooms[uid].exits = r.exits or rooms[uid].exits
+    end
+    return true
+  end
+
+  function OnPluginInstall()
+    rooms = rooms or {}
+    if __load_rooms_file() then
+      Note("Mapper: Loaded " .. tostring(table_size(rooms)) .. " rooms from file")
+    else
+      Note("Mapper: Starting with empty map")
+    end
+  end
+
+  function OnPluginSaveState()
+    __save_rooms_file()
+  end
+
+  function OnPluginClose()
+    __save_rooms_file()
+  end
+  ]]>
+  </script>
+
+</muclient>
