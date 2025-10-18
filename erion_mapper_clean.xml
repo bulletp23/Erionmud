@@ -778,14 +778,83 @@ TIPS:
   local function walk_path(dirs)
     if not dirs or #dirs == 0 then return end
     
-    -- Simple approach: just send all commands with a small delay
-    for i, d in ipairs(dirs) do
-      local cmd
-      if type(d) == "string" and d:sub(1,4) == "cmd:" then
-        cmd = d:sub(5)
+    -- Build optimized speedwalk, breaking at custom exits
+    local command_groups = {}
+    local current_group = {}
+    
+    for i, current_dir in ipairs(dirs) do
+      -- Handle custom exits - they need to be separate commands
+      if type(current_dir) == "string" and current_dir:sub(1,4) == "cmd:" then
+        -- Save any accumulated normal directions first
+        if #current_group > 0 then
+          table.insert(command_groups, {type = "run", dirs = current_group})
+          current_group = {}
+        end
+        -- Add custom exit as its own command
+        table.insert(command_groups, {type = "custom", cmd = current_dir:sub(5)})
       else
-        cmd = dir_short[d] or d:sub(1,1)
+        -- Accumulate normal directions
+        table.insert(current_group, current_dir)
       end
+    end
+    
+    -- Don't forget remaining directions
+    if #current_group > 0 then
+      table.insert(command_groups, {type = "run", dirs = current_group})
+    end
+    
+    -- Now build commands from groups
+    local commands = {}
+    for _, group in ipairs(command_groups) do
+      if group.type == "custom" then
+        table.insert(commands, group.cmd)
+      else
+        -- Build run string for normal directions
+        local speedwalk_parts = {}
+        local i = 1
+        local group_dirs = group.dirs
+        
+        while i <= #group_dirs do
+          local short_dir = dir_short[group_dirs[i]] or group_dirs[i]:sub(1,1)
+          
+          -- Count consecutive same directions
+          local count = 1
+          while i + count <= #group_dirs do
+            local next_short = dir_short[group_dirs[i + count]] or group_dirs[i + count]:sub(1,1)
+            if next_short ~= short_dir then
+              break
+            end
+            count = count + 1
+          end
+          
+          -- Build the run command (e.g., "3e" or just "e")
+          if count > 1 then
+            table.insert(speedwalk_parts, count .. short_dir)
+          else
+            table.insert(speedwalk_parts, short_dir)
+          end
+          
+          i = i + count
+        end
+        
+        local speedwalk_string = table.concat(speedwalk_parts, "")
+        table.insert(commands, "run " .. speedwalk_string)
+      end
+    end
+    
+    if mapper_debug then
+      Note("================================================================================")
+      Note("Mapper DEBUG: SPEEDWALK")
+      Note("  Original path: " .. table.concat(dirs, ", "))
+      Note("  Optimized commands:")
+      for i, cmd in ipairs(commands) do
+        Note("    " .. i .. ". " .. cmd)
+      end
+      Note("================================================================================")
+    end
+    
+    -- Send all commands with small delays between them (starting at index 1, not 0)
+    for i, cmd in ipairs(commands) do
       DoAfterSpecial(0.1 * i, cmd, sendto.world)
     end
   end
