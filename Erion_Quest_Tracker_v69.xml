@@ -8,24 +8,15 @@
     purpose="Erion quest tracker: grid with clickable Area/Room/Mob names and expeditions."
     date_written="2025-10-14"
     requires="4.94"
-    version="1.61"
+    version="1.64"
     save_state="y"
   >
     <description><![CDATA[
-      v18.01 - Updates
-        • FIXED: Area click now properly sends nexus enter command
-        • NEW: Global quest win detection clears global quest rows
-        • Click area now sends both commands without delay
-      v18.00 - Major Visual Overhaul
-        • NEW: Modern design with gradient effects and shadows
-        • NEW: Fully clickable target list with hyperlink styling
-        • NEW: Hover effects on all interactive elements
-        • NEW: Better responsive layout that adapts to window size
-        • NEW: Status bar with quest count and visual feedback
-        • IMPROVED: Enhanced color scheme with better contrast
-        • IMPROVED: Smoother animations and transitions
-        • IMPROVED: Better text fitting with intelligent truncation
-        • Clicks: Area → home visit kaeldrys ; nexus enter <area_lower> | Room → mapper find <room_lower> | Mob → where <mob_lower>
+      v18.04 - Scan/Oscan Complete Rewrite
+        • FIXED: Oscan #quest now properly detects and highlights junkyard items
+        • FIXED: Scan @qt now properly captures mob lines with all formats
+        • FIXED: Type-based trigger activation (junkyard → oscan, mobs → scan)
+        • IMPROVED: Dual trigger system for maximum compatibility
     ]]>
 	</description>
   </plugin>
@@ -37,7 +28,7 @@
   </aliases>
 
   <triggers>
-    <!-- Quest request detection - trigger on asking for quest -->
+    <!-- Quest request detection -->
     <trigger match="^You ask The Giver for a quest\.$" script="qt_on_quest_request" enabled="y" regexp="y" sequence="100"/>
     <trigger match="^You ask The Giver for a junkyard quest\.$" script="qt_on_junkyard_request" enabled="y" regexp="y" sequence="100"/>
     <trigger match="^You ask The Giver for an expedition\.$" script="qt_on_expedition_request" enabled="y" regexp="y" sequence="100"/>
@@ -46,7 +37,7 @@
     <trigger match="^Global Quest:.+$" script="qt_parse_quest" enabled="y" regexp="y"/>
     
     <!-- Global Quest Win Clear -->
-    <trigger match="^You WIN your \\d+(?:st|nd|rd|th) global quest!!!\\s*$" script="qt_global_win" enabled="y" regexp="y" sequence="100"/>
+    <trigger match="^You WIN your \d+(?:st|nd|rd|th) global quest!!!\s*$" script="qt_global_win" enabled="y" regexp="y" sequence="100"/>
     
     <!-- Quest info response (gag the output) -->
     <trigger match="^You are on a quest to .+ in the vicinity of (.+) of (.+)\.$" script="qt_parse_quest_info" enabled="y" regexp="y" omit_from_output="y"/>
@@ -57,7 +48,7 @@
     <!-- Gag "not on quest" message -->
     <trigger match="^You aren't currently on a quest\.$" enabled="y" regexp="y" omit_from_output="y" script="qt_gag_no_quest"/>
     
-    <!-- Junkyard Quest markers (higher sequence to fire first) -->
+    <!-- Junkyard Quest markers -->
     <trigger match="^Junkyard Quest:.+$" script="qt_parse_quest" enabled="y" regexp="y" sequence="50"/>
     
     <!-- Timed Junkyard Quest (list format) -->
@@ -67,19 +58,19 @@
     <trigger name="qt_jy_end" match="^$" script="qt_jy_end" enabled="n" regexp="y"/>
     
     <!-- Global Quest targets (list format) -->
-    <trigger name="qt_gq_begin" match="^Quest targets\s*:\s*$" script="qt_gq_begin" enabled="y" regexp="y"/>
-    <trigger name="qt_gq_line" match="^\s*\d+\.\s+.+$" script="qt_gq_line" enabled="n" regexp="y"/>
-    <trigger name="qt_gq_end" match="^$" script="qt_gq_end" enabled="n" regexp="y"/>
+    <trigger name="qt_gq_begin" match="^Quest targets\s*:\s*$" script="qt_gq_begin" enabled="y" regexp="y" sequence="50"/>
+    <trigger name="qt_gq_line" match="^\s*\d+\.\s+.+$" script="qt_gq_line" enabled="n" regexp="y" sequence="50"/>
+    <trigger name="qt_gq_end" match="^$" script="qt_gq_end" enabled="n" regexp="y" sequence="50"/>
 
     <!-- Expeditions block -->
     <trigger match="Expedition\s+Targets" script="qt_exp_begin" enabled="y" regexp="y"/>
     <trigger match="^\s*Find\s+and\s+kill\s+.+\s+in\s+.+" script="qt_exp_line" enabled="y" regexp="y"/>
     <trigger match="^\s*[-]+\s*$" script="qt_exp_end" enabled="y" regexp="y"/>
 
-    <!-- Global Junkyards (wrap-aware) -->
-    <trigger name="qt_gjy_begin" match="^\s*Junkyard\s+Items\s*:\s*$" script="qt_gjy_begin" enabled="y" regexp="y"/>
-    <trigger name="qt_gjy_line"  match="^\s*\d+\.\s+.*$" script="qt_gjy_line" enabled="n" regexp="y"/>
-    <trigger name="qt_gjy_cont"  match="^\s*(?!\d+\.\s).*?[Ii]n.*$" script="qt_gjy_cont" enabled="n" regexp="y"/>
+    <!-- Global Junkyards -->
+    <trigger name="qt_gjy_begin" match="^\s*Junkyard\s+Items\s*:\s*$" script="qt_gjy_begin" enabled="y" regexp="y" sequence="100"/>
+    <trigger name="qt_gjy_line"  match="^\s*\d+\.\s+.*$" script="qt_gjy_line" enabled="n" regexp="y" sequence="100"/>
+    <trigger name="qt_gjy_cont"  match="^\s*(?!\d+\.\s).*?[Ii]n.*$" script="qt_gjy_cont" enabled="n" regexp="y" sequence="100"/>
 
     <!-- Death removal -->
     <trigger match="^\s*(.+)\s+is\s+dead!\s*(?:R\.I\.P\.)?\s*$" script="qt_on_death" enabled="y" regexp="y"/>
@@ -101,17 +92,47 @@
     <trigger name="qt_where_line" match="^.+$" script="qt_where_line" enabled="n" regexp="y"/>
     <trigger name="qt_where_end" match="^$" script="qt_where_end" enabled="n" regexp="y"/>
     
+    <!-- Auto oscan on stop running -->
+    <trigger match="^You stop running\.$" script="qt_auto_scan" enabled="y" regexp="y"/>
+    
+    <!-- Unified scan trigger system - both scan and oscan use same triggers -->
+    <trigger name="qt_unified_start" match="^Right here you see:$" script="qt_unified_begin" enabled="y" regexp="y" sequence="40"/>
+    <trigger name="qt_unified_nearby" match="^\d+\s+\w+\s+you see:?\s*$" script="qt_unified_nearby_begin" enabled="y" regexp="y" sequence="40"/>
+    <trigger name="qt_unified_line" match="^\s*-\s+(.+)$" script="qt_unified_line_handler" enabled="n" regexp="y" omit_from_output="y" sequence="40"/>
+    <trigger name="qt_unified_end" match="^$" script="qt_unified_end_handler" enabled="n" regexp="y" sequence="40"/>
+    <trigger name="qt_oscan_nothing" match="^You find nothing noteworthy while scanning the area\.$" script="qt_oscan_nothing_handler" enabled="y" regexp="y" omit_from_output="y" sequence="40"/>
+    
     <!-- Home visit failure recovery -->
     <trigger match="^The Gods have forsaken you\.$" script="qt_gods_forsaken" enabled="y" regexp="y"/>
+    <trigger match="^You are rooted in place!$" script="qt_rooted" enabled="y" regexp="y"/>
+    <trigger match="^You pray for safe passage to a friend's home!$" script="qt_home_success" enabled="y" regexp="y"/>
+    <trigger match="^There isn't a nexus bolted to the room\.$" script="qt_no_nexus" enabled="y" regexp="y"/>
+    <trigger match="^You step through the nexus\.$" script="qt_nexus_success" enabled="y" regexp="y"/>
+    <trigger match="^.+ grants you entry into .+'s home\.$" script="qt_home_granted" enabled="y" regexp="y"/>
+    
+    <!-- Clear pending_area when we see a room description -->
+    <trigger match="^(.+): (.+) \(Id \d+\)\s*$" script="qt_room_arrived" enabled="y" regexp="y" sequence="100"/>
   </triggers>
 
   <script>
   <![CDATA[
--- Erion Quest Tracker v18.01 (Lua 5.1)
+-- Erion Quest Tracker v18.04 (Lua 5.1)
 require "movewindow"
 
 -- ===== State =====
-local QT = { debug=false, rows={}, exp_mode=false, hots={}, scroll_offset=0, hover_row=nil, quest_complete=false, pending_area=nil }
+local QT = { 
+  debug=false, 
+  rows={}, 
+  exp_mode=false, 
+  hots={}, 
+  scroll_offset=0, 
+  hover_row=nil, 
+  quest_complete=false, 
+  pending_area=nil, 
+  auto_oscan=true,
+  last_scan_time=0,
+  scan_cooldown=2
+}
 
 -- ===== Quest Request Handlers =====
 function qt_on_quest_request(name, line, wildcards)
@@ -136,31 +157,26 @@ local UI = {
   w=tonumber(GetVariable("qt_w") or "750"),
   h=tonumber(GetVariable("qt_h") or "280"), 
   
-  -- Modern color scheme
-  bg=0x1a1a1a,           -- Dark background
-  bg_alt=0x202020,       -- Alternating row
-  fg=0xe0e0e0,           -- Light text
-  fg_dim=0xa0a0a0,       -- Dimmed text
+  bg=0x1a1a1a,
+  bg_alt=0x202020,
+  fg=0xe0e0e0,
+  fg_dim=0xa0a0a0,
   
-  -- Accent colors
-  primary=0xFFFF00,      -- Cyan for links
-  primary_hover=0xFFFF80, -- Lighter cyan for hover
-  success=0x4ade80,      -- Green for status
-  warning=0xfbbf24,      -- Yellow/gold
+  primary=0xFFFF00,
+  primary_hover=0xFFFF80,
+  success=0x4ade80,
+  warning=0xfbbf24,
   
-  -- UI elements
-  title_bg=0x2563eb,     -- Rich blue title bar
-  title_fg=0xffffff,     -- White title text
-  header_bg=0x1e293b,    -- Dark slate header
-  header_fg=0xf1f5f9,    -- Light header text
-  border=0x334155,       -- Border color
-  shadow=0x0f172a,       -- Shadow color
+  title_bg=0x2563eb,
+  title_fg=0xffffff,
+  header_bg=0x1e293b,
+  header_fg=0xf1f5f9,
+  border=0x334155,
+  shadow=0x0f172a,
   
-  -- Fonts
   font="Consolas", 
   fontsize=9,
   
-  -- Layout
   title_h=26, 
   header_h=24, 
   row_h=22, 
@@ -169,8 +185,7 @@ local UI = {
   padding=12,
   gap=10,
   
-  -- Column width percentages
-  col_pct={10, 32, 28, 24, 6}  -- Type, Area, Room, Mob, Kill
+  col_pct={10, 32, 28, 24, 6}
 }
 
 local function dprint(msg, ...) if QT.debug then if select("#", ...) > 0 then Note(string.format("[QT] "..msg, ...)) else Note("[QT] "..tostring(msg)) end end end
@@ -179,14 +194,12 @@ local function add_row(t,a,r,m) table.insert(QT.rows,{type=t or "",area=a or "",
 local function clear_rows() QT.rows = {}; QT.scroll_offset = 0 end
 local function ui_save_pos() SetVariable("qt_w", tostring(UI.w)); SetVariable("qt_h", tostring(UI.h)); movewindow.save_state(UI.name) end
 
--- Dynamic hotspots
 local function clear_dynamic_hotspots() for id,_ in pairs(QT.hots) do WindowDeleteHotspot(UI.name, id) end QT.hots = {} end
 local function add_hotspot(id,l,t,r,b,click_callback) 
   WindowAddHotspot(UI.name, id, l, t, r, b, "", "", "", "", click_callback, miniwin.cursor_hand or 0, 0)
   QT.hots[id]=true 
 end
 
--- Helpers
 local function norm_lower(s) s=(s or ""):gsub("^%s+",""):gsub("%s+$",""); s=s:gsub("%s+"," "); return s:lower() end
 local function strip_ansi(s) local ESC=string.char(27); return (s:gsub(ESC .. "%[[0-9;]*m","")) end
 
@@ -199,7 +212,6 @@ local function clean_capture(s)
   return s
 end
 
--- Text fitting with ellipsis
 local function fit_text(text, max_width, font_id)
   if not text or text == "" then return "" end
   local tw = WindowTextWidth(UI.name, font_id, text)
@@ -216,104 +228,72 @@ local function fit_text(text, max_width, font_id)
   return "..."
 end
 
--- Click actions
 local function click_area(area)
   area=norm_lower(area)
   if area=="" then return end
-  QT.pending_area = area  -- Store for potential retry
-  Send("home visit kaeldrys")
-  Send("nexus enter " .. area)
+  
+  dprint("click_area called: area='%s', pending_area='%s'", area, tostring(QT.pending_area))
+  
+  if QT.pending_area and QT.pending_area ~= area then
+    dprint("Different area clicked, replacing pending_area")
+    QT.pending_area = area
+    Send("home visit kaeldrys")
+    Send("nexus enter " .. area)
+  elseif not QT.pending_area then
+    QT.pending_area = area
+    dprint("No pending_area, setting to: %s", area)
+    Send("home visit kaeldrys")
+    Send("nexus enter " .. area)
+  else
+    dprint("Same area '%s' clicked while pending, ignoring to prevent spam", area)
+  end
 end
+
 local function click_room(room) room=norm_lower(room); if room=="" then return end; Execute("mapper find " .. room) end
 local function click_mob(mob)  mob=norm_lower(mob); if mob==""  then return end; Send("where " .. mob) end
-
--- Smart kill command - extracts best keyword from mob name
-local function click_kill(mob)
-  if not mob or mob == "" then return end
-  
-  local mob_lower = mob:lower()
-  
-  -- Remove common articles and adjectives
-  local words_to_remove = {
-    "^the ", "^a ", "^an ",
-    "^big ", "^small ", "^large ", "^huge ", "^tiny ", "^little ",
-    "^old ", "^young ", "^ancient ", "^elder ",
-    "^evil ", "^dark ", "^black ", "^white ", "^red ", "^blue ", "^green ",
-    "^dangerous ", "^fierce ", "^wild ", "^rabid ", "^angry ", "^mad ",
-    "^deadly ", "^vicious ", "^savage ", "^brutal ", "^cruel ",
-    "^mighty ", "^powerful ", "^strong ", "^weak ", "^feeble ",
-    "^giant ", "^gigantic ", "^massive ", "^enormous ",
-    "^undead ", "^zombie ", "^skeletal ", "^rotting ", "^decaying ",
-    "^demonic ", "^infernal ", "^hellish ", "^cursed ",
-    "^fanatic ", "^zealous ", "^crazed ", "^insane "
-  }
-  
-  for _, prefix in ipairs(words_to_remove) do
-    mob_lower = mob_lower:gsub(prefix, "")
-  end
-  
-  -- Get the last word (usually the noun/identifier)
-  local last_word = mob_lower:match("%s*(%S+)%s*$")
-  
-  if last_word and last_word ~= "" then
-    Send("kill " .. last_word)
-  else
-    -- Fallback to full name if parsing fails
-    Send("kill " .. norm_lower(mob))
-  end
-end
+local function click_kill(mob) Send("kill @qt") end
+local function click_get_quest() Send("get #quest") end
 
 local windowinfo
-
--- Resize state
 local startx = 0
 local starty = 0
-
--- Forward declare ui_draw
 local ui_draw
 
--- Forward declare ui_draw
-local ui_draw
-
--- Hotspot callbacks
 function qt_click_area(flags,id) 
   local i=tonumber(id:match("^qt_area_(%d+)$") or "")
   local r=QT.rows[i]
-  if r and r.area and r.area ~= "" then 
-    click_area(r.area)
-  end
+  if r and r.area and r.area ~= "" then click_area(r.area) end
 end
 
 function qt_click_room(flags,id) 
   local i=tonumber(id:match("^qt_room_(%d+)$") or "")
   local r=QT.rows[i]
-  if r and r.room and r.room ~= "" then 
-    click_room(r.room)
-  end
+  if r and r.room and r.room ~= "" then click_room(r.room) end
 end
 
 function qt_click_mob(flags,id)
   local i=tonumber(id:match("^qt_mob_(%d+)$") or "")
   local r=QT.rows[i]
-  if r and r.mob and r.mob ~= "" then 
-    click_mob(r.mob)
-  end
+  if r and r.mob and r.mob ~= "" then click_mob(r.mob) end
 end
 
 function qt_click_kill(flags,id)
   local i=tonumber(id:match("^qt_kill_(%d+)$") or "")
   local r=QT.rows[i]
-  if r and r.mob and r.mob ~= "" then 
-    click_kill(r.mob)
-  end
+  if r and r.mob and r.mob ~= "" then click_kill(r.mob) end
 end
 
--- Calculate column positions
+function qt_click_get(flags,id)
+  local i=tonumber(id:match("^qt_get_(%d+)$") or "")
+  local r=QT.rows[i]
+  if r and (r.type == "Junkyard" or r.type == "GJunkyard") then click_get_quest() end
+end
+
 local function calc_columns(width)
   local pad = UI.padding
   local gap = UI.gap
   local inner = width - (pad * 2)
-  local total_gap = gap * 4  -- 4 gaps between 5 columns
+  local total_gap = gap * 4
   local available = inner - total_gap
   
   local type_w = math.floor(available * UI.col_pct[1] / 100)
@@ -331,48 +311,36 @@ local function calc_columns(width)
   }
 end
 
--- Draw with modern styling
 ui_draw = function()
   if not UI.visible then return end
   local w, h = UI.w, UI.h
   
-  -- Background with subtle gradient effect
   WindowRectOp(UI.name, miniwin.rect_fill, 0, 0, w, h, UI.bg)
-  
-  -- Title bar with gradient
   WindowGradient(UI.name, 0, 0, w, UI.title_h, UI.title_bg, 0x1e40af, 2)
-  
-  -- Title text with shadow effect
   WindowText(UI.name, "qt_font_title", "Erion Quest Tracker", 13, 6, 0, 0, UI.title_fg)
   
-  -- Get column layout
   local cols = calc_columns(w)
   
-  -- Header section
   local hy1 = UI.title_h
   local hy2 = hy1 + UI.header_h
   WindowRectOp(UI.name, miniwin.rect_fill, 0, hy1, w, hy2, UI.header_bg)
   
-  -- Header text
   WindowText(UI.name, "qt_font_bold", "Type", cols.type_x + 2, hy1 + 6, 0, 0, UI.header_fg)
   WindowText(UI.name, "qt_font_bold", "Area", cols.area_x + 2, hy1 + 6, 0, 0, UI.header_fg)
   WindowText(UI.name, "qt_font_bold", "Room", cols.room_x + 2, hy1 + 6, 0, 0, UI.header_fg)
   WindowText(UI.name, "qt_font_bold", "Target", cols.mob_x + 2, hy1 + 6, 0, 0, UI.header_fg)
   WindowText(UI.name, "qt_font_bold", "Kill", cols.kill_x + 2, hy1 + 6, 0, 0, UI.header_fg)
   
-  -- Bottom border for header
   WindowLine(UI.name, 0, hy2, w, hy2, UI.border, 0, 2)
   
   clear_dynamic_hotspots()
   
-  -- Calculate visible rows
   local content_start = hy2 + 2
   local content_end = h - UI.status_h - 2
   local row_area_height = content_end - content_start
   local max_visible = math.floor(row_area_height / UI.row_h)
   local total_rows = #QT.rows
   
-  -- Scrollbar if needed
   if total_rows > max_visible then
     local scroll_x = w - 10
     local scroll_h = row_area_height - 8
@@ -385,7 +353,6 @@ ui_draw = function()
     WindowRectOp(UI.name, miniwin.rect_fill, scroll_x + 1, thumb_y, scroll_x + 5, thumb_y + thumb_h, UI.primary)
   end
   
-  -- Draw rows with clickable targets
   local start_idx = 1 + QT.scroll_offset
   local end_idx = math.min(total_rows, start_idx + max_visible - 1)
   
@@ -396,17 +363,14 @@ ui_draw = function()
     
     local row_y = y
     
-    -- Row background with hover effect
     if i % 2 == 1 then
       WindowRectOp(UI.name, miniwin.rect_fill, 0, row_y, w, row_y + UI.row_h, UI.bg_alt)
     end
     
-    -- Subtle row separator
     WindowLine(UI.name, UI.padding, row_y + UI.row_h - 1, w - UI.padding, row_y + UI.row_h - 1, UI.border, 0, 1)
     
     local text_y = row_y + 4
     
-    -- Type column (non-clickable)
     local type_color = UI.fg_dim
     if r.type == "Quest" then type_color = UI.success
     elseif r.type == "Global" then type_color = UI.warning
@@ -415,7 +379,6 @@ ui_draw = function()
     local type_text = fit_text(r.type, cols.type_w - 4, "qt_font")
     WindowText(UI.name, "qt_font_bold", type_text, cols.type_x + 2, text_y, 0, 0, type_color)
     
-    -- Area column (clickable with hyperlink style)
     local area_text = r.area or ""
     if area_text ~= "" then
       local fitted_area = fit_text(area_text, cols.area_w - 8, "qt_font")
@@ -423,7 +386,6 @@ ui_draw = function()
       add_hotspot("qt_area_"..i, cols.area_x, row_y, cols.area_x + cols.area_w - 4, row_y + UI.row_h, "qt_click_area")
     end
     
-    -- Room column (clickable with hyperlink style)
     local room_text = r.room or ""
     if room_text ~= "" then
       local fitted_room = fit_text(room_text, cols.room_w - 8, "qt_font")
@@ -431,54 +393,54 @@ ui_draw = function()
       add_hotspot("qt_room_"..i, cols.room_x, row_y, cols.room_x + cols.room_w - 4, row_y + UI.row_h, "qt_click_room")
     end
     
-    -- Mob/Target column (clickable with hyperlink style)
     local mob_text = r.mob or ""
     if mob_text ~= "" then
       local fitted_mob = fit_text(mob_text, cols.mob_w - 8, "qt_font")
       WindowText(UI.name, "qt_font", fitted_mob, cols.mob_x + 2, text_y, 0, 0, UI.primary)
       add_hotspot("qt_mob_"..i, cols.mob_x, row_y, cols.mob_x + cols.mob_w - 4, row_y + UI.row_h, "qt_click_mob")
       
-      -- Kill button
       local btn_w = cols.kill_w - 4
       local btn_h = UI.row_h - 4
       local btn_x = cols.kill_x + 2
       local btn_y = row_y + 2
       
-      -- Button background
+      local btn_text = "Kill"
+      local btn_callback = "qt_click_kill"
+      local btn_id = "qt_kill_"..i
+      
+      if r.type == "Junkyard" or r.type == "GJunkyard" then
+        btn_text = "Get"
+        btn_callback = "qt_click_get"
+        btn_id = "qt_get_"..i
+      end
+      
       WindowRectOp(UI.name, miniwin.rect_fill, btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, UI.primary)
       WindowRectOp(UI.name, miniwin.rect_frame, btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, UI.border)
       
-      -- Button text
-      local btn_text = "Kill"
       local text_w = WindowTextWidth(UI.name, "qt_font_small", btn_text)
       local text_x = btn_x + (btn_w - text_w) / 2
       WindowText(UI.name, "qt_font_small", btn_text, text_x, btn_y + 4, 0, 0, UI.bg)
       
-      -- Button hotspot
-      add_hotspot("qt_kill_"..i, btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, "qt_click_kill")
+      add_hotspot(btn_id, btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, btn_callback)
     end
     
     y = y + UI.row_h
     if y + UI.row_h > content_end then break end
   end
   
-  -- Status bar at bottom
   local status_y = h - UI.status_h
   WindowRectOp(UI.name, miniwin.rect_fill, 0, status_y, w, h, UI.header_bg)
   WindowLine(UI.name, 0, status_y, w, status_y, UI.border, 0, 2)
   
-  -- Count indicator
   if total_rows > 0 then
     local count_text = string.format("%d quest%s", total_rows, total_rows ~= 1 and "s" or "")
     WindowText(UI.name, "qt_font_small", count_text, UI.padding, status_y + 6, 0, 0, UI.success)
   elseif QT.quest_complete then
-    -- Quest complete message in bold bright red (RGB: 255, 0, 0)
     WindowText(UI.name, "qt_font_bold", "Return to Quest Giver and complete your task!", UI.padding, status_y + 4, 0, 0, 0x0000FF)
   else
     WindowText(UI.name, "qt_font_small", "No active quests", UI.padding, status_y + 6, 0, 0, UI.fg_dim)
   end
   
-  -- Resize corner indicator
   for i = 1, 3 do
     local offset = i * 5
     WindowLine(UI.name, w - offset - 3, h - 4, w - 4, h - offset - 3, UI.border, 0, 2)
@@ -490,7 +452,6 @@ local function ui_create()
   windowinfo = movewindow.install(UI.name, miniwin.pos_top_right or 0, POS, true)
   WindowCreate(UI.name, windowinfo.window_left, windowinfo.window_top, UI.w, UI.h, windowinfo.window_mode or 0, windowinfo.window_flags or 0, UI.bg)
   
-  -- Font styles
   WindowFont(UI.name, "qt_font", UI.font, UI.fontsize, false, false, false, false, 0, 0)
   WindowFont(UI.name, "qt_font_bold", UI.font, UI.fontsize, true, false, false, false, 0, 0)
   WindowFont(UI.name, "qt_font_title", UI.font, UI.fontsize + 1, true, false, false, false, 0, 0)
@@ -499,10 +460,8 @@ local function ui_create()
   UI.visible=true
   WindowShow(UI.name, true)
   
-  -- Draggable title bar
   movewindow.add_drag_handler(UI.name, 0, 0, 0, UI.title_h)
   
-  -- Resize handle
   local resize_size = 20
   WindowAddHotspot(UI.name, "resize_handle",
                    UI.w - resize_size, UI.h - resize_size,
@@ -515,19 +474,16 @@ local function ui_create()
   ui_draw()
 end
 
--- Resize functions (from working mapper plugin)
 function ResizeMoveCallback()
   local posx = WindowInfo(UI.name, 17)
   local posy = WindowInfo(UI.name, 18)
   
-  -- Safety check for nil values
   if not posx or not posy then return end
   if not UI.min_width then UI.min_width = 450 end
   if not UI.max_width then UI.max_width = 1400 end
   if not UI.min_height then UI.min_height = 180 end
   if not UI.max_height then UI.max_height = 900 end
   
-  -- Calculate new size based on mouse movement
   local new_w = math.max(UI.min_width, math.min(UI.max_width, UI.w + (posx - startx)))
   local new_h = math.max(UI.min_height, math.min(UI.max_height, UI.h + (posy - starty)))
   
@@ -538,7 +494,6 @@ function ResizeMoveCallback()
     starty = posy
     WindowResize(UI.name, UI.w, UI.h, UI.bg)
     
-    -- Update resize hotspot position
     local resize_size = 20
     WindowMoveHotspot(UI.name, "resize_handle",
                      UI.w - resize_size, UI.h - resize_size,
@@ -559,7 +514,6 @@ function resize_start(flags, hotspot_id)
   starty = WindowInfo(UI.name, 18)
 end
 
--- Show/hide
 local function ui_show() if not UI.visible then ui_create() else WindowShow(UI.name,true); ui_draw() end end
 local function ui_hide() if UI.visible then WindowShow(UI.name,false); WindowDelete(UI.name); UI.visible=false end end
 
@@ -602,7 +556,6 @@ local AREA_NAMES = {
   "Labyrinth Duo Quest", "Crimson Keep Party Quest"
 }
 
--- Create lowercase lookup table for faster matching
 local AREA_LOOKUP = {}
 for _, area in ipairs(AREA_NAMES) do
   AREA_LOOKUP[area:lower()] = area
@@ -697,7 +650,6 @@ end
 
 function qt_parse_quest(name, line, wildcards) qt_parse_line(line or "") end
 
--- State for quest detection
 local QUEST_STATE = { skip_quest_info = false }
 
 function qt_parse_quest_giver(name, line, wildcards)
@@ -732,10 +684,7 @@ function qt_parse_quest_giver(name, line, wildcards)
   dprint("Giver detected regular quest - parsing line and requesting quest info")
   QUEST_STATE.skip_quest_info = false
   
-  -- Also try to parse the Giver's text directly
   qt_parse_line(giver_text)
-  
-  -- Then request quest info for more details
   Send("quest info")
 end
 
@@ -747,23 +696,18 @@ function qt_parse_quest_info(name, line, wildcards)
   
   dprint("Quest info line: %s", line)
   
-  -- Extract everything after "You are on a quest to VERB "
   local quest_part = line:match("^You are on a quest to %w+ (.+)$")
   if not quest_part then
     dprint("Failed to extract quest part")
     return
   end
   
-  -- Remove trailing period if present
   quest_part = quest_part:gsub("%.$", "")
-  
   dprint("Quest part: %s", quest_part)
   
-  -- Check if it has "in the vicinity of" or just "in"
   local has_vicinity = quest_part:match("in the vicinity of")
   
   if has_vicinity then
-    -- Format: "in the vicinity of ROOM of/in AREA"
     local after_vicinity = quest_part:match("in the vicinity of (.+)$")
     if not after_vicinity then
       dprint("Failed to extract after vicinity")
@@ -772,7 +716,6 @@ function qt_parse_quest_info(name, line, wildcards)
     
     dprint("After vicinity: %s", after_vicinity)
     
-    -- Find all " of " and " in " positions
     local separators = {}
     local search_pos = 1
     while true do
@@ -814,14 +757,12 @@ function qt_parse_quest_info(name, line, wildcards)
     dprint("Found %d separators", #separators)
     
     if #separators > 0 then
-      -- Try to match against known area names
       local best_match = nil
       for i = 1, #separators do
         local sep = separators[i]
         local potential_area = after_vicinity:sub(sep.pos + sep.len)
         local area_lower = potential_area:lower()
         
-        -- Check if this matches a known area name
         if AREA_LOOKUP[area_lower] then
           dprint("Found area match: '%s' at separator %d", potential_area, i)
           best_match = i
@@ -835,7 +776,6 @@ function qt_parse_quest_info(name, line, wildcards)
         area = after_vicinity:sub(matched_sep.pos + matched_sep.len)
         dprint("Using matched separator at pos %d: room='%s' area='%s'", matched_sep.pos, room, area)
       else
-        -- Fallback to last separator if no area name match found
         dprint("No area name match found, using last separator")
         local last_sep = separators[#separators]
         room = after_vicinity:sub(1, last_sep.pos - 1)
@@ -847,7 +787,6 @@ function qt_parse_quest_info(name, line, wildcards)
       return
     end
   else
-    -- Format: "in ROOM of/in AREA"
     local after_in = quest_part:match("in (.+)$")
     if not after_in then
       dprint("Failed to extract after 'in'")
@@ -856,7 +795,6 @@ function qt_parse_quest_info(name, line, wildcards)
     
     dprint("After in: %s", after_in)
     
-    -- Find all " of " and " in " positions
     local separators = {}
     local search_pos = 1
     while true do
@@ -898,14 +836,12 @@ function qt_parse_quest_info(name, line, wildcards)
     dprint("Found %d separators", #separators)
     
     if #separators > 0 then
-      -- Try to match against known area names
       local best_match = nil
       for i = 1, #separators do
         local sep = separators[i]
         local potential_area = after_in:sub(sep.pos + sep.len)
         local area_lower = potential_area:lower()
         
-        -- Check if this matches a known area name
         if AREA_LOOKUP[area_lower] then
           dprint("Found area match: '%s' at separator %d", potential_area, i)
           best_match = i
@@ -919,7 +855,6 @@ function qt_parse_quest_info(name, line, wildcards)
         area = after_in:sub(matched_sep.pos + matched_sep.len)
         dprint("Using matched separator at pos %d: room='%s' area='%s'", matched_sep.pos, room, area)
       else
-        -- Fallback to last separator if no area name match found
         dprint("No area name match found, using last separator")
         local last_sep = separators[#separators]
         room = after_in:sub(1, last_sep.pos - 1)
@@ -933,7 +868,6 @@ function qt_parse_quest_info(name, line, wildcards)
   end
   
   if area and room then
-    -- Extract the target (mob name) from the original line
     local target = line:match("^You are on a quest to %w+ (.+) in the vicinity of") or 
                    line:match("^You are on a quest to %w+ (.+) in") or 
                    "target"
@@ -975,19 +909,16 @@ local function _qt_gjy_try_parse()
   
   dprint("GJY trying to parse: '%s'", s)
   
-  -- Remove the leading number and period, and strip (here) and trailing period
   local without_num = s:match("^%d+%.%s+(.+)$")
   if not without_num then
     dprint("GJY: Could not strip number prefix")
     return false
   end
   
-  -- Remove (here) marker and trailing periods/spaces
   without_num = without_num:gsub("%s*%([Hh][Ee][Rr][Ee]%)%s*", " ")
   without_num = without_num:gsub("%.%s*$", "")
   without_num = without_num:gsub("%s+$", "")
   
-  -- Find all positions of " in " (case insensitive)
   local positions = {}
   local search_pos = 1
   while true do
@@ -1002,9 +933,30 @@ local function _qt_gjy_try_parse()
     return false
   end
   
-  -- Use the FIRST and LAST " in " positions (skip any in the middle that are part of room name)
-  local item_separator = positions[1]
-  local area_separator = positions[#positions]
+  dprint("GJY: Found %d ' in ' separators", #positions)
+  
+  local best_match = nil
+  for i = 2, #positions do
+    local potential_area = without_num:sub(positions[i] + 4)
+    local area_lower = potential_area:lower()
+    
+    if AREA_LOOKUP[area_lower] then
+      dprint("GJY: Found area match '%s' at separator %d", potential_area, i)
+      best_match = i
+      break
+    end
+  end
+  
+  local item_separator, area_separator
+  if best_match then
+    item_separator = positions[1]
+    area_separator = positions[best_match]
+    dprint("GJY: Using area match at position %d", best_match)
+  else
+    dprint("GJY: No area match, using first and last separators")
+    item_separator = positions[1]
+    area_separator = positions[#positions]
+  end
   
   local item = without_num:sub(1, item_separator - 1)
   local room = without_num:sub(item_separator + 4, area_separator - 1)
@@ -1036,7 +988,6 @@ function qt_gjy_line(name, line, wildcards)
   if not GJY.active then return end
   dprint("GJY line: '%s'", line)
   
-  -- If we have a previous buffer, this might be a new item, so try to parse the buffer first
   if GJY.buf ~= "" and line:match("^%s*%d+%.") then
     dprint("New item detected, parsing previous buffer first")
     _qt_gjy_try_parse()
@@ -1054,10 +1005,8 @@ function qt_gjy_cont(name, line, wildcards)
   
   dprint("GJY cont: '%s'", line)
   
-  -- Check for end markers
   if line:match("^%s*-+%s*$") or line:match("^%s*$") then
     dprint("GJY end marker detected")
-    -- Try to parse any remaining buffer
     if GJY.buf ~= "" then
       _qt_gjy_try_parse()
     end
@@ -1067,15 +1016,12 @@ function qt_gjy_cont(name, line, wildcards)
     return
   end
   
-  -- Check if this is a new numbered item (which means previous item is complete)
   if line:match("^%s*%d+%.") then
     dprint("New item number detected, parsing previous buffer")
     _qt_gjy_try_parse()
-    -- Start new buffer with this line
     GJY.buf = line
     _qt_gjy_try_parse()
   else
-    -- This is a continuation of the current item
     GJY.buf = (GJY.buf == "" and line or (GJY.buf .. " " .. line))
     _qt_gjy_try_parse()
   end
@@ -1093,19 +1039,16 @@ local function _qt_jy_try_parse()
   
   dprint("JY trying to parse: '%s'", s)
   
-  -- Remove the leading [#]
   local without_num = s:match("^%[%s*%d+%s*%]%s+(.+)$")
   if not without_num then
     dprint("JY: Could not strip bracket prefix")
     return false
   end
   
-  -- Remove (here) marker and trailing periods/spaces
   without_num = without_num:gsub("%s*%([Hh][Ee][Rr][Ee]%)%s*", " ")
   without_num = without_num:gsub("%.%s*$", "")
   without_num = without_num:gsub("%s+$", "")
   
-  -- Find all positions of " in " (case insensitive)
   local positions = {}
   local search_pos = 1
   while true do
@@ -1120,9 +1063,30 @@ local function _qt_jy_try_parse()
     return false
   end
   
-  -- Use the FIRST and LAST " in " positions (skip any in the middle that are part of room name)
-  local item_separator = positions[1]
-  local area_separator = positions[#positions]
+  dprint("JY: Found %d ' in ' separators", #positions)
+  
+  local best_match = nil
+  for i = 2, #positions do
+    local potential_area = without_num:sub(positions[i] + 4)
+    local area_lower = potential_area:lower()
+    
+    if AREA_LOOKUP[area_lower] then
+      dprint("JY: Found area match '%s' at separator %d", potential_area, i)
+      best_match = i
+      break
+    end
+  end
+  
+  local item_separator, area_separator
+  if best_match then
+    item_separator = positions[1]
+    area_separator = positions[best_match]
+    dprint("JY: Using area match at position %d", best_match)
+  else
+    dprint("JY: No area match, using first and last separators")
+    item_separator = positions[1]
+    area_separator = positions[#positions]
+  end
   
   local item = without_num:sub(1, item_separator - 1)
   local room = without_num:sub(item_separator + 4, area_separator - 1)
@@ -1155,7 +1119,6 @@ function qt_jy_line(name, line, wildcards)
   if not JY.active then return end
   dprint("JY line received: '%s'", line)
   
-  -- If we have a previous buffer and see a new bracketed item, parse the buffer first
   if JY.buf ~= "" and line:match("^%s*%[%s*%d+%s*%]") then
     dprint("New item detected, parsing previous buffer first")
     _qt_jy_try_parse()
@@ -1173,7 +1136,6 @@ function qt_jy_cont(name, line, wildcards)
   
   dprint("JY cont received: '%s'", line)
   
-  -- Check for end marker (blank line)
   if line:match("^%s*$") then
     dprint("JY blank line - ending")
     if JY.buf ~= "" then
@@ -1186,14 +1148,12 @@ function qt_jy_cont(name, line, wildcards)
     return
   end
   
-  -- Check if this is a new numbered item
   if line:match("^%s*%[%s*%d+%s*%]") then
     dprint("New bracketed item in continuation, parsing previous first")
     _qt_jy_try_parse()
     JY.buf = line
     _qt_jy_try_parse()
   else
-    -- Continuation of current item
     JY.buf = (JY.buf == "" and line or (JY.buf .. " " .. line))
     _qt_jy_try_parse()
   end
@@ -1203,7 +1163,6 @@ function qt_jy_end(name, line, wildcards)
   if JY.active then
     dprint("JY end trigger: '%s'", line)
     
-    -- Try to parse any remaining buffer before ending
     if JY.buf ~= "" then
       dprint("Parsing remaining buffer before end")
       _qt_jy_try_parse()
@@ -1241,30 +1200,93 @@ function qt_gq_line(name, line, wildcards)
     return
   end
   
-  -- Try patterns in order of specificity
-  -- Pattern 1: mob in room in area (strip trailing period)
-  local mob, room, area = line:match("^%s*%d+%.%s+(.-)%s+[Ii]n%s+(.-)%s+[Ii]n%s+(.-)%.?%s*$")
-  if mob and room and area then
-    mob, room, area = clean_capture(mob), clean_capture(room), clean_capture(area)
-    -- Remove any trailing period from area
-    area = area:gsub("%.$", "")
-    ui_update("Global", area, room, mob, {clear=false})
-    dprint("Global Quest target (with room): mob='%s' room='%s' area='%s'", mob, room, area)
+  local without_num = line:match("^%s*%d+%.%s+(.+)$")
+  if not without_num then
+    dprint("GQ: Could not strip number prefix")
     return
   end
   
-  -- Pattern 2: mob in area (no room, strip trailing period)
-  local mob2, area2 = line:match("^%s*%d+%.%s+(.-)%s+[Ii]n%s+(.-)%.?%s*$")
-  if mob2 and area2 then
-    mob2, area2 = clean_capture(mob2), clean_capture(area2)
-    -- Remove any trailing period from area
-    area2 = area2:gsub("%.$", "")
-    ui_update("Global", area2, "", mob2, {clear=false})
-    dprint("Global Quest target: mob='%s' area='%s'", mob2, area2)
-    return
+  without_num = without_num:gsub("%.%s*$", "")
+  without_num = without_num:gsub("%s+$", "")
+  
+  dprint("GQ without number: '%s'", without_num)
+  
+  local positions = {}
+  local search_pos = 1
+  while true do
+    local found_pos = without_num:lower():find(" in ", search_pos, true)
+    if not found_pos then break end
+    table.insert(positions, found_pos)
+    search_pos = found_pos + 1
   end
   
-  dprint("GQ Line failed to parse")
+  dprint("GQ: Found %d ' in ' separators", #positions)
+  
+  if #positions == 0 then
+    dprint("GQ: No ' in ' separator found")
+    return
+  elseif #positions == 1 then
+    local mob = without_num:sub(1, positions[1] - 1)
+    local area = without_num:sub(positions[1] + 4)
+    
+    mob, area = clean_capture(mob), clean_capture(area)
+    
+    if AREA_LOOKUP[area:lower()] then
+      dprint("GQ: Simple format matched - mob='%s' area='%s'", mob, area)
+      ui_update("Global", area, "", mob, {clear=false})
+      return
+    else
+      dprint("GQ: Area '%s' not in lookup", area)
+      return
+    end
+  else
+    local best_match = nil
+    for i = 1, #positions do
+      local potential_area = without_num:sub(positions[i] + 4)
+      local area_lower = potential_area:lower()
+      
+      if AREA_LOOKUP[area_lower] then
+        dprint("GQ: Found area match '%s' at separator %d", potential_area, i)
+        best_match = i
+        break
+      end
+    end
+    
+    if best_match then
+      if best_match == 1 then
+        local mob = without_num:sub(1, positions[1] - 1)
+        local area = without_num:sub(positions[1] + 4)
+        mob, area = clean_capture(mob), clean_capture(area)
+        dprint("GQ: mob='%s' room='' area='%s'", mob, area)
+        ui_update("Global", area, "", mob, {clear=false})
+      else
+        local mob = without_num:sub(1, positions[1] - 1)
+        local room = without_num:sub(positions[1] + 4, positions[best_match] - 1)
+        local area = without_num:sub(positions[best_match] + 4)
+        mob, room, area = clean_capture(mob), clean_capture(room), clean_capture(area)
+        dprint("GQ: mob='%s' room='%s' area='%s'", mob, room, area)
+        ui_update("Global", area, room, mob, {clear=false})
+      end
+    else
+      dprint("GQ: No area match, using last separator")
+      local last_pos = positions[#positions]
+      local mob_and_maybe_room = without_num:sub(1, last_pos - 1)
+      local area = without_num:sub(last_pos + 4)
+      
+      if #positions > 1 then
+        local mob = without_num:sub(1, positions[1] - 1)
+        local room = without_num:sub(positions[1] + 4, last_pos - 1)
+        mob, room, area = clean_capture(mob), clean_capture(room), clean_capture(area)
+        dprint("GQ: (fallback with room) mob='%s' room='%s' area='%s'", mob, room, area)
+        ui_update("Global", area, room, mob, {clear=false})
+      else
+        local mob = mob_and_maybe_room
+        mob, area = clean_capture(mob), clean_capture(area)
+        dprint("GQ: (fallback no room) mob='%s' area='%s'", mob, area)
+        ui_update("Global", area, "", mob, {clear=false})
+      end
+    end
+  end
 end
 
 function qt_gq_end(name, line, wildcards)
@@ -1286,7 +1308,6 @@ local function remove_row_by_mob(mobline)
     if r and norm_lower(r.mob or "") == key then
       table.remove(QT.rows, i)
       
-      -- Check if this was the last quest target
       if #QT.rows == 0 then
         QT.quest_complete = true
         dprint("Last quest target killed - quest complete!")
@@ -1304,7 +1325,6 @@ local function remove_row_by_mob(mobline)
     if mob_normalized ~= "" and mob_normalized:find(key, 1, true) then
       table.remove(QT.rows, i)
       
-      -- Check if this was the last quest target
       if #QT.rows == 0 then
         QT.quest_complete = true
         dprint("Last quest target killed - quest complete!")
@@ -1333,6 +1353,7 @@ end
 function qt_on_quest_turnin(name, line, wildcards)
   dprint("Quest turned in")
   QT.quest_complete = false
+  clear_rows()
   ui_draw()
 end
 
@@ -1343,7 +1364,6 @@ local function remove_row_by_item(itemline)
   
   dprint("Item pickup: looking for '%s'", key)
   
-  -- Try exact match first
   for i=1,#QT.rows do
     local r = QT.rows[i]
     local row_item = norm_lower(r.mob or "")
@@ -1352,7 +1372,6 @@ local function remove_row_by_item(itemline)
     if row_item == key then
       table.remove(QT.rows, i)
       
-      -- Check if this was the last junkyard item
       if #QT.rows == 0 then
         QT.quest_complete = true
         dprint("Last junkyard item collected - quest complete!")
@@ -1364,17 +1383,14 @@ local function remove_row_by_item(itemline)
     end
   end
   
-  -- Try partial match (item name contains pickup text OR pickup text contains item name)
   for i=1,#QT.rows do
     local r = QT.rows[i]
     local item_normalized = norm_lower(r.mob or "")
     
     if item_normalized ~= "" then
-      -- Check both directions for partial matches
       if item_normalized:find(key, 1, true) or key:find(item_normalized, 1, true) then
         table.remove(QT.rows, i)
         
-        -- Check if this was the last junkyard item
         if #QT.rows == 0 then
           QT.quest_complete = true
           dprint("Last junkyard item collected - quest complete!")
@@ -1399,6 +1415,443 @@ function qt_on_item_pickup(name, line, wildcards)
       dprint("Item pickup seen but no matching row: %s", item)
     end
   end
+end
+
+-- ===== Lifecycle =====
+function OnPluginInstall() ui_show() end
+function OnPluginEnable()  ui_show() end
+function OnPluginDisable() ui_hide() end
+function OnPluginSaveState() ui_save_pos() end
+
+-- ===== Commands =====
+local function echo(s) Note("[QT] "..s) end
+
+local function show_help()
+  ColourNote("cyan", "", string.rep("=", 76))
+  ColourNote("white", "", "                    Erion Quest Tracker v18.04")
+  ColourNote("cyan", "", string.rep("=", 76))
+  ColourNote("yellow", "", "")
+  ColourNote("yellow", "", "COMMANDS:")
+  ColourNote("lime", "", "  qt on/off         ", "white", "", "- Show/hide tracker window")
+  ColourNote("lime", "", "  qt clear          ", "white", "", "- Clear all tracked quests")
+  ColourNote("lime", "", "  qt reset          ", "white", "", "- Reset window size and position")
+  ColourNote("lime", "", "  qt oscan on|off   ", "white", "", "- Toggle auto scan on stop running")
+  ColourNote("lime", "", "  qt cooldown <0-10>", "white", "", "- Set scan cooldown (default: 2 sec)")
+  ColourNote("lime", "", "  qt debug on|off   ", "white", "", "- Toggle debug output")
+  ColourNote("lime", "", "  qt help           ", "white", "", "- Show this help")
+  ColourNote("yellow", "", "")
+  ColourNote("yellow", "", "USAGE:")
+  ColourNote("white", "", "  Request quests normally:")
+  ColourNote("lime", "", "    quest request", "white", "", "  |  ", "lime", "", "quest junkyard", "white", "", "  |  ", "lime", "", "quest expedition")
+  ColourNote("white", "", "")
+  ColourNote("white", "", "  Click to navigate:")
+  ColourNote("cyan", "", "    Area   ", "white", "", "- Teleport to nexus entrance")
+  ColourNote("cyan", "", "    Room   ", "white", "", "- Find with mapper")
+  ColourNote("cyan", "", "    Target ", "white", "", "- Locate with 'where' command")
+  ColourNote("cyan", "", "    [Kill] ", "white", "", "- Attack mob (sends 'kill @qt')")
+  ColourNote("cyan", "", "    [Get]  ", "white", "", "- Collect item (sends 'get #quest')")
+  ColourNote("yellow", "", "")
+  ColourNote("yellow", "", "AUTO-REMOVAL:")
+  ColourNote("white", "", "  Quest mobs removed when killed, junkyard items when picked up")
+  ColourNote("yellow", "", "")
+  ColourNote("yellow", "", "AUTO-SCAN:")
+  ColourNote("white", "", "  Automatically scans on stop running (cooldown prevents spam)")
+  ColourNote("white", "", "  • Quest mobs: 'scan @qt' → highlights with [Q]/[GQ]/[EXP]")
+  ColourNote("white", "", "  • Junkyard items: 'oscan #quest' → highlights with [JY]/[GJY]")
+  ColourNote("cyan", "", string.rep("=", 76))
+end
+
+function qt_cmd(args)
+  local a={} for t in string.gmatch(args or "", "[^%s]+") do table.insert(a,t) end
+  local sub=(a[1] or ""):lower()
+  if sub=="on" then ui_show(); echo("UI: shown")
+  elseif sub=="off" then ui_hide(); echo("UI: hidden")
+  elseif sub=="reset" then UI.w,UI.h=750,280; ui_show(); ui_save_pos(); echo("UI: reset")
+  elseif sub=="clear" then clear_rows(); ui_draw(); echo("Rows cleared")
+  elseif sub=="oscan" then
+    local oscan_arg = (a[2] or ""):lower()
+    if oscan_arg == "on" or oscan_arg == "1" then
+      QT.auto_oscan = true
+      echo("Auto oscan: ON")
+    elseif oscan_arg == "off" or oscan_arg == "0" then
+      QT.auto_oscan = false
+      echo("Auto oscan: OFF")
+    else
+      QT.auto_oscan = not QT.auto_oscan
+      echo("Auto oscan: " .. (QT.auto_oscan and "ON" or "OFF"))
+    end
+  elseif sub=="cooldown" then
+    local cooldown_val = tonumber(a[2])
+    if cooldown_val and cooldown_val >= 0 and cooldown_val <= 10 then
+      QT.scan_cooldown = cooldown_val
+      echo(string.format("Scan cooldown: %d seconds", cooldown_val))
+    else
+      echo(string.format("Current cooldown: %d seconds (use: qt cooldown <0-10>)", QT.scan_cooldown))
+    end
+  elseif sub=="debug" then 
+    local debug_arg = (a[2] or ""):lower()
+    if debug_arg == "on" or debug_arg == "1" then
+      QT.debug = true
+      echo("Debug: ON")
+    elseif debug_arg == "off" or debug_arg == "0" then
+      QT.debug = false
+      echo("Debug: OFF")
+    else
+      QT.debug = not QT.debug
+      echo("Debug: " .. (QT.debug and "ON" or "OFF"))
+    end
+  elseif sub=="help" or sub=="?" then show_help()
+  else
+    echo("Commands: on|off|clear|reset|oscan|cooldown|debug|help")
+    echo("Type 'qt help' for full documentation")
+  end
+end
+
+-- ===== Global Quest Win =====
+function qt_global_win(name, line, wildcards)
+  dprint("Global quest win detected")
+  for i=#QT.rows,1,-1 do
+    local r = QT.rows[i]
+    if r and r.type == "Global" then
+      table.remove(QT.rows, i)
+      dprint("Removed Global quest row: %s", r.mob or "")
+    end
+  end
+  QT.quest_complete = false
+  if UI and UI.visible then 
+    ui_draw() 
+  end
+  dprint("Global quest completed - cleared all Global rows and reset status")
+end
+
+-- ===== Gods Forsaken Recovery =====
+function qt_gods_forsaken(name, line, wildcards)
+  dprint("Gods have forsaken - attempting recovery")
+  if QT.pending_area and QT.pending_area ~= "" then
+    local area = QT.pending_area
+    Note("[QT] Attempting to recover home visit via hag entrance...")
+    Send("enter hag")
+    Send("home visit kaeldrys")
+    Send("nexus enter " .. area)
+    dprint("Recovery sequence sent for area: %s", area)
+  else
+    dprint("No pending area to retry")
+  end
+end
+
+function qt_rooted(name, line, wildcards)
+  dprint("Rooted in place - clearing pending area")
+  if QT.pending_area then
+    Note("[QT] Cannot travel while rooted. Clear root and try again.")
+    QT.pending_area = nil
+  end
+end
+
+function qt_home_success(name, line, wildcards)
+  dprint("Home visit prayer detected - waiting for grant or forsaken")
+end
+
+function qt_home_granted(name, line, wildcards)
+  dprint("Home visit granted - nexus command should execute next")
+end
+
+function qt_no_nexus(name, line, wildcards)
+  dprint("No nexus in room - clearing pending area")
+  if QT.pending_area then
+    Note("[QT] No nexus found. Navigation halted.")
+    QT.pending_area = nil
+  end
+end
+
+function qt_nexus_success(name, line, wildcards)
+  if QT.pending_area then
+    dprint("Successfully entered nexus for area: %s - CLEARING pending_area", QT.pending_area)
+    QT.pending_area = nil
+  else
+    dprint("Entered nexus but no pending_area was set")
+  end
+end
+
+function qt_room_arrived(name, line, wildcards)
+  if QT.pending_area then
+    local area_name = wildcards[1] or ""
+    dprint("Arrived at room in '%s' - CLEARING pending_area (was: %s)", area_name, QT.pending_area)
+    QT.pending_area = nil
+  end
+end
+
+-- ===== Scan/Oscan State Management =====
+local OSCAN = { active=false, location="", waiting_for_items=false, found_items=false }
+local SCAN = { active=false, location="", waiting_for_mobs=false, found_mobs=false }
+local PROCESSED_LINES = {}
+
+local function disable_scan_triggers()
+  EnableTrigger("qt_unified_line", false)
+  EnableTrigger("qt_unified_end", false)
+  SCAN.active = false
+  SCAN.waiting_for_mobs = false
+  OSCAN.active = false
+  OSCAN.waiting_for_items = false
+  dprint("Unified triggers disabled")
+end
+
+local function clear_processed_lines()
+  PROCESSED_LINES = {}
+  dprint("Cleared processed lines")
+end
+
+-- ===== Auto Oscan/Scan on Stop Running =====
+function qt_auto_scan(name, line, wildcards)
+  if not QT.auto_oscan then
+    dprint("Auto scan disabled")
+    return
+  end
+  
+  if OSCAN.active or SCAN.active then
+    dprint("Scan already active, skipping auto scan")
+    return
+  end
+  
+  local current_time = os.time()
+  if QT.last_scan_time and (current_time - QT.last_scan_time) < QT.scan_cooldown then
+    dprint("Scan cooldown active (%d seconds remaining)", QT.scan_cooldown - (current_time - QT.last_scan_time))
+    return
+  end
+  
+  local has_junkyard = false
+  local has_quest_mob = false
+  
+  for _, r in ipairs(QT.rows) do
+    if r.type == "Junkyard" or r.type == "GJunkyard" then
+      has_junkyard = true
+    elseif r.type == "Quest" or r.type == "Global" or r.type == "Expedition" then
+      has_quest_mob = true
+    end
+  end
+  
+  if has_junkyard then
+    dprint("Auto oscan triggered - sending oscan #quest")
+    Send("oscan #quest")
+    QT.last_scan_time = current_time
+  end
+  
+  if has_quest_mob then
+    dprint("Auto scan triggered - sending scan @qt")
+    Send("scan @qt")
+    QT.last_scan_time = current_time
+  end
+  
+  if not has_junkyard and not has_quest_mob then
+    dprint("No active quests, skipping scan")
+  end
+end
+
+function qt_oscan_nothing_handler(name, line, wildcards)
+  dprint("qt_oscan_nothing_handler triggered")
+  
+  local has_junkyard = false
+  for _, r in ipairs(QT.rows) do
+    if r.type == "Junkyard" or r.type == "GJunkyard" then
+      has_junkyard = true
+      break
+    end
+  end
+  
+  if has_junkyard then
+    ColourNote("yellow", "", "[QT] No item nearby")
+  end
+  
+  disable_scan_triggers()
+  dprint("Oscan found nothing - scan ended")
+end
+
+-- ===== UNIFIED Scan Handlers =====
+function qt_unified_begin(name, line, wildcards)
+  dprint("qt_unified_begin triggered")
+  clear_processed_lines()
+  
+  local has_quest_mob = false
+  for _, r in ipairs(QT.rows) do
+    if r.type == "Quest" or r.type == "Global" or r.type == "Expedition" then
+      has_quest_mob = true
+      dprint("  Found quest mob in tracker")
+      break
+    end
+  end
+  
+  local has_junkyard = false
+  for _, r in ipairs(QT.rows) do
+    if r.type == "Junkyard" or r.type == "GJunkyard" then
+      has_junkyard = true
+      dprint("  Found junkyard item in tracker")
+      break
+    end
+  end
+  
+  if has_quest_mob then
+    SCAN.active = true
+    SCAN.location = "here"
+    SCAN.waiting_for_mobs = true
+    SCAN.found_mobs = false
+    dprint("Scan: ACTIVATED for quest mobs at 'here'")
+  end
+  
+  if has_junkyard then
+    OSCAN.active = true
+    OSCAN.location = "here"
+    OSCAN.waiting_for_items = true
+    OSCAN.found_items = false
+    dprint("Oscan: ACTIVATED for junkyard items at 'here'")
+  end
+  
+  if has_quest_mob or has_junkyard then
+    EnableTrigger("qt_unified_line", true)
+    EnableTrigger("qt_unified_end", true)
+  end
+end
+
+function qt_unified_nearby_begin(name, line, wildcards)
+  dprint("qt_unified_nearby_begin triggered")
+  clear_processed_lines()
+  
+  local location = line:match("^(%d+%s+%w+)%s+you see") or "nearby"
+  
+  local has_quest_mob = false
+  for _, r in ipairs(QT.rows) do
+    if r.type == "Quest" or r.type == "Global" or r.type == "Expedition" then
+      has_quest_mob = true
+      break
+    end
+  end
+  
+  local has_junkyard = false
+  for _, r in ipairs(QT.rows) do
+    if r.type == "Junkyard" or r.type == "GJunkyard" then
+      has_junkyard = true
+      break
+    end
+  end
+  
+  if has_quest_mob then
+    SCAN.active = true
+    SCAN.location = location
+    SCAN.waiting_for_mobs = true
+    SCAN.found_mobs = false
+    dprint("Scan: ACTIVATED for quest mobs at '%s'", location)
+  end
+  
+  if has_junkyard then
+    OSCAN.active = true
+    OSCAN.location = location
+    OSCAN.waiting_for_items = true
+    OSCAN.found_items = false
+    dprint("Oscan: ACTIVATED for junkyard items at '%s'", location)
+  end
+  
+  if has_quest_mob or has_junkyard then
+    EnableTrigger("qt_unified_line", true)
+    EnableTrigger("qt_unified_end", true)
+  end
+end
+
+function qt_unified_line_handler(name, line, wildcards)
+  local raw_text = wildcards[1]
+  if not raw_text or raw_text == "" then return end
+  
+  raw_text = strip_ansi(raw_text)
+  raw_text = clean_capture(raw_text)
+  local line_key = raw_text:lower()
+  
+  if PROCESSED_LINES[line_key] then
+    dprint("Line already processed, skipping")
+    return
+  end
+  
+  local is_mob = raw_text:match("%(Level%s+%d+%)")
+  
+  if SCAN.active and SCAN.waiting_for_mobs and is_mob then
+    dprint("Processing as potential quest mob: %s", raw_text)
+    
+    local mob_name = raw_text:match("%(Level%s+%d+%)%([EGN]%)%([A-Z]%)%s+(.+)")
+    if not mob_name then
+      mob_name = raw_text:match("%(Level%s+%d+%)%([EGN]%)%s+(.+)")
+    end
+    if not mob_name then
+      mob_name = raw_text:match("%)%s+(.+)$")
+    end
+    
+    if mob_name then
+      mob_name = clean_capture(mob_name)
+      local mob_for_match = mob_name:match("^(.+)%s+%(%d+%)%s*$") or mob_name
+      local mob_lower = mob_for_match:lower()
+      
+      for _, r in ipairs(QT.rows) do
+        if r.type == "Quest" or r.type == "Global" or r.type == "Expedition" then
+          local tracker_mob_lower = (r.mob or ""):lower()
+          
+          if mob_lower:find(tracker_mob_lower, 1, true) or tracker_mob_lower:find(mob_lower, 1, true) then
+            local tag = "[Q]"
+            if r.type == "Global" then tag = "[GQ]"
+            elseif r.type == "Expedition" then tag = "[EXP]" end
+            
+            local location_tag = ""
+            if SCAN.location ~= "here" then
+              location_tag = " [" .. SCAN.location .. "]"
+            end
+            
+            PROCESSED_LINES[line_key] = true
+            ColourNote("cyan", "", "     - " .. mob_name .. location_tag .. " ", "yellow", "", tag)
+            SCAN.found_mobs = true
+            dprint("MATCHED quest mob!")
+            return
+          end
+        end
+      end
+    end
+  end
+  
+  if OSCAN.active and OSCAN.waiting_for_items and not is_mob then
+    dprint("Processing as potential junkyard item: %s", raw_text)
+    
+    local item_lower = raw_text:lower()
+    
+    for _, r in ipairs(QT.rows) do
+      if r.type == "Junkyard" or r.type == "GJunkyard" then
+        local tracker_item_lower = (r.mob or ""):lower()
+        
+        if item_lower:find(tracker_item_lower, 1, true) or tracker_item_lower:find(item_lower, 1, true) then
+          local tag = r.type == "Junkyard" and "[JY]" or "[GJY]"
+          
+          local location_tag = ""
+          if OSCAN.location ~= "here" then
+            location_tag = " [" .. OSCAN.location .. "]"
+          end
+          
+          PROCESSED_LINES[line_key] = true
+          ColourNote("cyan", "", "     - " .. raw_text .. location_tag .. " ", "yellow", "", tag)
+          OSCAN.found_items = true
+          dprint("MATCHED junkyard item!")
+          return
+        end
+      end
+    end
+  end
+  
+  dprint("No match for: %s", raw_text)
+end
+
+function qt_unified_end_handler(name, line, wildcards)
+  dprint("Unified scan ended")
+  
+  if SCAN.active and SCAN.waiting_for_mobs and not SCAN.found_mobs then
+    ColourNote("yellow", "", "[QT] No target found")
+  end
+  
+  if OSCAN.active and OSCAN.waiting_for_items and not OSCAN.found_items then
+    ColourNote("yellow", "", "[QT] No item nearby")
+  end
+  
+  disable_scan_triggers()
 end
 
 -- ===== Where command auto-navigation =====
@@ -1452,152 +1905,6 @@ function qt_where_end(name, line, wildcards)
     else
       WHERE.seen_blank = true
     end
-  end
-end
-
--- ===== Lifecycle =====
-function OnPluginInstall() ui_show() end
-function OnPluginEnable()  ui_show() end
-function OnPluginDisable() ui_hide() end
-function OnPluginSaveState() ui_save_pos() end
-
--- ===== Commands =====
-local function echo(s) Note("[QT] "..s) end
-
-local function show_help()
-  ColourNote("cyan", "", string.rep("=", 76))
-  ColourNote("white", "", "                    Erion Quest Tracker v18.01")
-  ColourNote("cyan", "", string.rep("=", 76))
-  ColourNote("yellow", "", "")
-  ColourNote("yellow", "", "OVERVIEW:")
-  ColourNote("white", "", "  Automatically tracks quests, junkyard tasks, and expeditions with")
-  ColourNote("white", "", "  a modern visual interface featuring clickable navigation and actions.")
-  ColourNote("yellow", "", "")
-  ColourNote("yellow", "", "COMMANDS:")
-  ColourNote("lime", "", "  qt on             ", "white", "", "- Show the quest tracker window")
-  ColourNote("lime", "", "  qt off            ", "white", "", "- Hide the quest tracker window")
-  ColourNote("lime", "", "  qt reset          ", "white", "", "- Reset window size and position")
-  ColourNote("lime", "", "  qt clear          ", "white", "", "- Clear all tracked quests")
-  ColourNote("lime", "", "  qt debug on|off   ", "white", "", "- Toggle debug output")
-  ColourNote("lime", "", "  qt help           ", "white", "", "- Show this help file")
-  ColourNote("yellow", "", "")
-  ColourNote("yellow", "", "HOW IT WORKS:")
-  ColourNote("white", "", "  The tracker automatically detects when you request quests:")
-  ColourNote("white", "", "    * Regular Quest:    ", "lime", "", "quest request")
-  ColourNote("white", "", "    * Junkyard Quest:   ", "lime", "", "quest junkyard")
-  ColourNote("white", "", "    * Expedition:       ", "lime", "", "quest expedition")
-  ColourNote("yellow", "", "")
-  ColourNote("yellow", "", "INTERACTIVE FEATURES:")
-  ColourNote("white", "", "  Click on any blue text in the tracker:")
-  ColourNote("cyan", "", "    Area Name     ", "white", "", "- Navigate to area entrance")
-  ColourNote("cyan", "", "    Room Name     ", "white", "", "- Find room with mapper")
-  ColourNote("cyan", "", "    Target/Mob    ", "white", "", "- Locate with 'where' command")
-  ColourNote("white", "", "")
-  ColourNote("white", "", "  Click the action buttons:")
-  ColourNote("cyan", "", "    [Kill] Button ", "white", "", "- Attack the target mob")
-  ColourNote("yellow", "", "")
-  ColourNote("yellow", "", "AUTO-REMOVAL:")
-  ColourNote("white", "", "  * Quest targets removed automatically when killed")
-  ColourNote("white", "", "  * Junkyard items removed when picked up")
-  ColourNote("white", "", "  * Global quests cleared when you win")
-  ColourNote("white", "", "  * Shows ", "red", "", "\"Return to Quest Giver...\"", "white", "", " when all targets complete")
-  ColourNote("yellow", "", "")
-  ColourNote("yellow", "", "WINDOW CONTROLS:")
-  ColourNote("white", "", "  * Drag the title bar to move the window")
-  ColourNote("white", "", "  * Drag bottom-right corner to resize")
-  ColourNote("white", "", "  * Window position and size saved automatically")
-  ColourNote("yellow", "", "")
-  ColourNote("yellow", "", "TIPS:")
-  ColourNote("white", "", "  * Kill button uses smart parsing (e.g., 'evil knight' -> 'kill knight')")
-  ColourNote("white", "", "  * Supports multiple quest targets (expeditions show all mobs)")
-  ColourNote("white", "", "  * Click Area to auto-navigate to nexus entrance")
-  ColourNote("cyan", "", string.rep("=", 76))
-end
-
-function qt_cmd(args)
-  local a={} for t in string.gmatch(args or "", "[^%s]+") do table.insert(a,t) end
-  local sub=(a[1] or ""):lower()
-  if sub=="on" then ui_show(); echo("UI: shown")
-  elseif sub=="off" then ui_hide(); echo("UI: hidden")
-  elseif sub=="reset" then UI.w,UI.h=750,280; ui_show(); ui_save_pos(); echo("UI: reset")
-  elseif sub=="clear" then clear_rows(); ui_draw(); echo("Rows cleared")
-  elseif sub=="help" or sub=="?" then show_help()
-  elseif sub=="debug" then 
-    local debug_arg = (a[2] or ""):lower()
-    if debug_arg == "on" or debug_arg == "1" then
-      QT.debug = true
-      echo("Debug: ON")
-    elseif debug_arg == "off" or debug_arg == "0" then
-      QT.debug = false
-      echo("Debug: OFF")
-    else
-      QT.debug = not QT.debug
-      echo("Debug: " .. (QT.debug and "ON" or "OFF"))
-    end
-  elseif sub=="testtrack" then
-    local text=args:match("testtrack%s+(.+)"); if not text then echo("Usage: qt testtrack The sceptre has been tracked to <Room> in <Area>."); return end
-    qt_parse_quest("", text, {})
-  elseif sub=="testitem" then
-    local text=args:match("testitem%s+(.+)"); if not text then echo("Usage: qt testitem ... that <item>'s now in <Room> in <Area> ..."); return end
-    qt_parse_quest("", text, {})
-  elseif sub=="testjunk" then
-    local text=args:match("testjunk%s+(.+)"); if not text then echo("Usage: qt testjunk [ 1] <item> in <Room> in <Area>"); return end
-    JY.active=true; qt_jy_line("", text, {}); JY.active=false
-  elseif sub=="testquestinfo" then
-    local text=args:match("testquestinfo%s+(.+)"); if not text then echo("Usage: qt testquestinfo You are on a quest to recover the fabled ring in <Room> of <Area>."); return end
-    qt_parse_quest_info("", text, {})
-  elseif sub=="testglobal" then
-    local text=args:match("testglobal%s+(.+)"); if not text then echo("Usage: qt testglobal 1. <mob> in <area>"); return end
-    GQ.active=true; qt_gq_line("", text, {}); GQ.active=false
-  elseif sub=="test" then
-    local text=args:match("test%s+(.+)"); if not text then echo("Usage: qt test <full quest line>"); return end
-    qt_parse_quest("", text, {})
-  elseif sub=="testexp" then
-    local text=args:match("testexp%s+(.+)"); if not text then echo("Usage: qt testexp Find and kill <mob> in <area>."); return end
-    QT.exp_mode=true; qt_exp_line("", text, {})
-  elseif sub=="testdeath" then
-    local m=args:match("testdeath%s+(.+)"); if not m then echo("Usage: qt testdeath <mob>"); return end
-    qt_on_death("", m.." is dead! R.I.P.", {})
-  elseif sub=="testpickup" then
-    local item=args:match("testpickup%s+(.+)"); if not item then echo("Usage: qt testpickup <item>"); return end
-    qt_on_item_pickup("", "You get " .. item .. " from the ground.", {item})
-  else
-    echo("Commands: qt on|off|reset|clear|debug on|off|help")
-    echo("Type 'qt help' for detailed documentation")
-  end
-end
-
--- ===== Global Quest Win (defined at end after all functions exist) =====
-function qt_global_win(name, line, wildcards)
-  dprint("Global quest win detected")
-  -- Clear all Global quest rows when winning
-  for i=#QT.rows,1,-1 do
-    local r = QT.rows[i]
-    if r and r.type == "Global" then
-      table.remove(QT.rows, i)
-      dprint("Removed Global quest row: %s", r.mob or "")
-    end
-  end
-  -- Reset quest complete flag so status shows "No active quests"
-  QT.quest_complete = false
-  if UI and UI.visible then 
-    ui_draw() 
-  end
-  dprint("Global quest completed - cleared all Global rows and reset status")
-end
-
--- ===== Gods Forsaken Recovery =====
-function qt_gods_forsaken(name, line, wildcards)
-  dprint("Gods have forsaken - attempting recovery")
-  if QT.pending_area and QT.pending_area ~= "" then
-    local area = QT.pending_area
-    Note("[QT] Attempting to recover home visit via hag entrance...")
-    Send("enter hag")
-    Send("home visit kaeldrys")
-    Send("nexus enter " .. area)
-    dprint("Recovery sequence sent for area: %s", area)
-  else
-    dprint("No pending area to retry")
   end
 end
 
