@@ -6,6 +6,7 @@ ErionV3ChatLog
  - Mouse wheel scrolling
 
 Erion Quest Tracker
+ - Added scanning for mobs / junkyard items
 
 Erion Mapper Display
 
