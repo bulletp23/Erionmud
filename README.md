@@ -1,9 +1,10 @@
 Erionmud Plugins
 
-ErionV3ChatLog
- - Added tabs
- - Ability to customize tabs with channels
- - Mouse wheel scrolling
+ErionV3.1ChatLog
+ - Added tabs - V3
+ - Ability to customize tabs with channels - V3
+ - Mouse wheel scrolling - V3
+ - Update tell - was not capturing - V3.1
 
 Erion Quest Tracker
  - Added scanning for mobs / junkyard items
