@@ -1,0 +1,1782 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE muclient>
+<muclient>
+  <plugin
+    name="Erion_SQLite_Mapper"
+    author="Wulfgar"
+    id="6572696F6E5F73716C697465"
+    language="Lua"
+    purpose="SQLite-based map builder for Erion (no GMCP)"
+    date_written="2025-10-19"
+    requires="4.59"
+    version="2.3"
+    save_state="y"
+  >
+    <description trim="y"><![CDATA[
+================================================================================
+                    ERION MAPPER v2.3 - SQLite Edition
+================================================================================
+
+NAVIGATION:
+  mapper find [name]          Search for rooms by name
+  mapper goto [uid]           Walk to a specific room by UID
+  mapper goto #[n]            Walk to result #n from last find
+  mapper thisroom             Show current room info
+
+NOTES SYSTEM:
+  mapper note [text]          Add/update a note for current room
+  mapper note show            Display current room's note
+  mapper note delete          Delete note from current room
+  mapper notes area           List all notes in current area
+  mapper notes all            List ALL notes across all areas
+  mapper notes search [text]  Search notes by content
+
+CUSTOM EXITS:
+  mapper cexit add [cmd]      Add a custom exit command
+                              Single: mapper cexit add climb wall
+                              Multiple: mapper cexit add get boulder, north
+  mapper cexits here          Show custom exits in current room
+  mapper cexits list          Show all custom exits in current area
+  mapper cexit delete here    Delete ALL custom exits from current room
+  mapper cexit delete [cmd]   Delete a specific custom exit from current room
+
+LOCKED EXITS:
+  mapper lockexit [dir]       Lock an exit (excludes from speedwalks)
+  mapper unlockexit [dir]     Unlock an exit
+  mapper lockedexits          Show locked exits in current room
+  mapper lockedexits list     Show all locked exits in current area
+
+AREA MANAGEMENT:
+  mapper list areas           Show all areas with room counts
+  mapper area log on/off      Toggle area capture logging
+
+DATA CLEANUP:
+  mapper delete room [uid]    Delete a specific room by UID
+  mapper delete area [name]   Delete all rooms in an area
+  mapper check path           Check exits from current room
+
+DATABASE MANAGEMENT:
+  mapper database             Show database info
+  mapper stats                Show detailed statistics
+
+DEBUG AND MAINTENANCE:
+  mapper debug on/off         Toggle debug messages
+  mapper save                 Database auto-saves (this is just for show)
+
+FILE STORAGE:
+  Database: erion_map.db in your world folder
+
+================================================================================
+]]></description>
+  </plugin>
+
+  <aliases>
+    <alias match="mapper database" enabled="y" script="get_database" sequence="100" />
+    <alias match="mapper stats" enabled="y" script="show_stats" sequence="100" />
+    <alias match="mapper thisroom" enabled="y" sequence="100" script="show_this_room" regexp="n" />
+    
+    <alias match="^mapper debug (on|off)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send>
+        if "%1" == "on" then
+          mapper_debug = true
+          Note("Mapper debug: ON")
+        else
+          mapper_debug = false
+          Note("Mapper debug: OFF")
+        end
+      </send>
+    </alias>
+    
+    <alias match="^mapper status$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send>
+        Note("================================================================================")
+        Note("MAPPER STATUS")
+        Note("================================================================================")
+        Note("Current room: " .. tostring(current_room))
+        Note("Debug mode: " .. tostring(mapper_debug))
+        Note("Total rooms: " .. tostring(db_count_rooms()))
+        Note("Database: " .. db_path())
+        Note("================================================================================")
+      </send>
+    </alias>
+
+    <alias match="mapper find *" enabled="y" sequence="100" script="map_find" regexp="n" />
+    <alias match="mapper goto *" enabled="y" sequence="100" script="map_goto" regexp="n" />
+    <alias match="^mapper help$" enabled="y" sequence="100" script="mapper_help" regexp="y" />
+  
+    <!-- NOTES SYSTEM ALIASES -->
+    <alias match="^mapper note show$" regexp="y" enabled="y" sequence="99" script="show_note_current" />
+    <alias match="^mapper note delete$" regexp="y" enabled="y" sequence="99" script="delete_note_current" />
+    <alias match="^mapper note (.+)$" regexp="y" enabled="y" sequence="101" send_to="12">
+      <send><![CDATA[
+        local note_text = Trim("%1")
+        if note_text == "" or note_text == "show" or note_text == "delete" then
+          return
+        end
+        
+        if not current_room then
+          Note("Cannot add note: current room unknown.")
+          return
+        end
+        
+        if db_set_note(current_room, note_text) then
+          local room = db_get_room(current_room)
+          Note("================================================================================")
+          Note("NOTE SAVED")
+          Note("================================================================================")
+          Note("Room: " .. (room and room.name or "unknown") .. " (" .. current_room .. ")")
+          Note("Note: " .. note_text)
+          Note("================================================================================")
+        else
+          Note("ERROR: Failed to save note.")
+        end
+      ]]></send>
+    </alias>
+    
+    <alias match="^mapper notes area$" regexp="y" enabled="y" sequence="100" script="list_notes_area" />
+    <alias match="^mapper notes all$" regexp="y" enabled="y" sequence="100" script="list_notes_all" />
+    <alias match="^mapper notes search (.+)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local search_text = Trim("%1")
+        if search_text == "" then
+          Note("Usage: mapper notes search [text]")
+          return
+        end
+        
+        local results = db_search_notes(search_text)
+        
+        if #results == 0 then
+          Note("No notes found containing '" .. search_text .. "'")
+          return
+        end
+        
+        Note("================================================================================")
+        Note("NOTES SEARCH RESULTS - '" .. search_text .. "'")
+        Note("================================================================================")
+        for _, r in ipairs(results) do
+          Note(string.format("[%s] %s - %s", r.uid, r.room_name, r.area))
+          Note("  Note: " .. r.note)
+        end
+        Note("================================================================================")
+        Note("Total results: " .. #results)
+      ]]></send>
+    </alias>
+
+    <!-- CUSTOM EXITS -->
+    <alias match="mapper cexit add *" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local cmd = Trim("%1")
+        if cmd == "" then
+          Note("Usage: mapper cexit add [command]")
+          Note("  Single command: mapper cexit add climb wall")
+          Note("  Multiple commands: mapper cexit add get boulder, north")
+          return
+        end
+        
+        if not current_room then
+          Note("Custom exit: current room unknown. Try 'look' first.")
+          return
+        end
+        
+        -- Split by comma to get individual commands
+        local commands = {}
+        for part in cmd:gmatch("[^,]+") do
+          local trimmed = Trim(part)
+          if trimmed ~= "" then
+            table.insert(commands, trimmed)
+          end
+        end
+        
+        if #commands == 0 then
+          Note("Custom exit: no valid commands found.")
+          return
+        end
+        
+        custom_pending = { 
+          from = tostring(current_room), 
+          cmd = cmd,
+          commands = commands
+        }
+        
+        if mapper_debug then
+          Note("================================================================================")
+          Note("CUSTOM EXIT ADD - DEBUG v2.3")
+          Note("================================================================================")
+          Note(string.format("From room: %s", current_room))
+          Note(string.format("Full command string: [%s]", cmd))
+          Note(string.format("Parsed into %d commands:", #commands))
+          for i, command in ipairs(commands) do
+            Note(string.format("  [%d] '%s'", i, command))
+          end
+          Note("Sending commands to MUD NOW...")
+          Note("================================================================================")
+        end
+        
+        -- Send all commands to the MUD
+        for i, command in ipairs(commands) do
+          if mapper_debug then
+            Note(string.format(">> Executing: Send('%s')", command))
+          end
+          Send(command)
+        end
+        
+        if mapper_debug then
+          Note("================================================================================")
+          Note("All commands sent! Waiting for room header to link exit...")
+          Note("================================================================================")
+        end
+      ]]></send>
+    </alias>
+    
+    <alias match="^mapper cexits list$" regexp="y" enabled="y" sequence="100" script="list_all_custom_exits" />
+    <alias match="^mapper cexits here$" regexp="y" enabled="y" sequence="100" script="list_custom_exits_here" />
+    
+    <alias match="^mapper cexit delete here$" regexp="y" enabled="y" sequence="99" send_to="12">
+      <send><![CDATA[
+        if not current_room then
+          Note("Custom exit: current room unknown.")
+          return
+        end
+        
+        local room = db_get_room(current_room)
+        if not room then
+          Note("Current room not in database.")
+          return
+        end
+        
+        local exits = db_get_exits(current_room)
+        local deleted_count = 0
+        
+        for dir, exit_data in pairs(exits) do
+          if dir:sub(1, 4) == "cmd:" then
+            db_delete_exit(current_room, dir)
+            local cmd = dir:sub(5)
+            Note(string.format("Deleted custom exit '%s' from room %s", cmd, current_room))
+            deleted_count = deleted_count + 1
+          end
+        end
+        
+        if deleted_count == 0 then
+          Note("No custom exits found in current room: " .. room.name)
+        else
+          Note(string.format("Deleted %d custom exit(s) from room %s", deleted_count, room.name))
+        end
+      ]]></send>
+    </alias>
+    
+    <alias match="^mapper cexit delete (.+)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local cmd = Trim("%1")
+        if not current_room then
+          Note("Custom exit: current room unknown.")
+          return
+        end
+        
+        local cmdkey = "cmd:" .. cmd
+        if db_delete_exit(current_room, cmdkey) then
+          Note(string.format("Deleted custom exit '%s' from room %s", cmd, current_room))
+        else
+          Note(string.format("No custom exit '%s' found in current room", cmd))
+        end
+      ]]></send>
+    </alias>
+
+    <!-- LOCKED EXITS -->
+    <alias match="^mapper lockexit (.+)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local dir = Trim("%1")
+        if not current_room then
+          Note("Lockexit: current room unknown.")
+          return
+        end
+        
+        if db_lock_exit(current_room, dir) then
+          local room_name = db_get_room_name(current_room) or "unknown"
+          Note(string.format("Locked exit '%s' in room %s (%s)", dir, room_name, current_room))
+        else
+          Note(string.format("No exit '%s' found in current room", dir))
+        end
+      ]]></send>
+    </alias>
+
+    <alias match="^mapper unlockexit (.+)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local dir = Trim("%1")
+        if not current_room then
+          Note("Unlockexit: current room unknown.")
+          return
+        end
+        
+        if db_unlock_exit(current_room, dir) then
+          Note(string.format("Unlocked exit '%s' in room %s", dir, current_room))
+        else
+          Note(string.format("Exit '%s' is not locked in current room", dir))
+        end
+      ]]></send>
+    </alias>
+
+    <alias match="^mapper lockedexits$" regexp="y" enabled="y" sequence="100" script="list_locked_exits_here" />
+    <alias match="^mapper lockedexits list$" regexp="y" enabled="y" sequence="100" script="list_all_locked_exits" />
+
+    <!-- AREA MANAGEMENT -->
+    <alias match="^mapper area log (on|off)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send>
+        area_verbose = ("%1" == "on")
+        Note("Area logging: " .. (area_verbose and "ON" or "OFF"))
+      </send>
+    </alias>
+    
+    <alias match="^mapper save$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send>
+        Note("Mapper: SQLite auto-saves all changes immediately.")
+        Note("Total rooms in database: " .. tostring(db_count_rooms()))
+      </send>
+    </alias>
+    
+    <alias match="^mapper delete room (\d+)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local uid = "%1"
+        local room_name = db_get_room_name(uid)
+        if room_name then
+          db_delete_room(uid)
+          Note(string.format("Deleted room %s (%s)", room_name, uid))
+        else
+          Note("Room " .. uid .. " not found in database")
+        end
+      ]]></send>
+    </alias>
+    
+    <alias match="^mapper delete area (.+)$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local area_name = Trim("%1")
+        local count = db_delete_area(area_name)
+        Note(string.format("Deleted %d rooms from area '%s'", count, area_name))
+      ]]></send>
+    </alias>
+    
+    <alias match="^mapper list areas$" regexp="y" enabled="y" sequence="100" send_to="12">
+      <send><![CDATA[
+        local areas = db_list_areas()
+        
+        Note("================================================================================")
+        Note("                           MAPPER AREAS")
+        Note("================================================================================")
+        for _, entry in ipairs(areas) do
+          Note(string.format("  %-50s [%d rooms]", entry.name, entry.count))
+        end
+        Note("================================================================================")
+        Note("Total areas: " .. #areas)
+      ]]></send>
+    </alias>
+  </aliases>
+
+  <triggers>
+    <!-- Movement direction capture -->
+    <trigger enabled="y" regexp="y" match="^You .* (north|south|east|west|up|down)\.$" send_to="12" sequence="90" omit_from_output="y">
+      <send>
+        last_move_direction = "%1"
+        if mapper_debug then
+          Note(string.format("Mapper DEBUG: Movement -> %s", last_move_direction))
+        end
+      </send>
+    </trigger>
+
+    <!-- Zone/Area banner capture -->
+    <trigger enabled="y" regexp="y" match="^You have passed into (.+)\.$" send_to="12" sequence="92">
+      <send>
+        local zone_name = Trim("%1")
+        pending_area = zone_name
+        if mapper_debug then
+          Note(string.format("Mapper DEBUG: Zone banner detected -> %s", zone_name))
+        end
+      </send>
+    </trigger>
+
+    <!-- PRIMARY ROOM HEADER TRIGGER -->
+    <trigger enabled="y" regexp="y" match="^(.+?):\s*(.+?)\s*\(Id\s+(\d+)\)\s*$" send_to="12" sequence="100" script="process_room_header">
+    </trigger>
+
+    <!-- FALLBACK: Room without area prefix -->
+    <trigger enabled="y" regexp="y" match="^\s*([^:]+?)\s*\(Id\s*(\d+)\)\s*$" send_to="12" sequence="101" script="process_room_header_no_area">
+    </trigger>
+
+    <!-- Exit list capture -->
+    <trigger enabled="y" regexp="y" match="^%s*%[Exits:%s*(.+)%]%s*$" send_to="12" sequence="95">
+      <send>
+        local raw = Trim("%1")
+        raw = raw:gsub(",", " "):gsub("%s+", " ")
+        raw = Trim(raw)
+        local exits = {}
+        for ex in string.gmatch(raw, "(%S+)") do
+          table.insert(exits, ex)
+        end
+
+        if current_room then
+          db_set_room_exits(current_room, exits)
+          if mapper_debug then
+            Note(string.format("Mapper DEBUG: Exits captured for room %s: %s", 
+              current_room, table.concat(exits, ", ")))
+          end
+        end
+      </send>
+    </trigger>
+  </triggers>
+
+  <script>
+  <![CDATA[
+  -- ===== GLOBAL STATE =====
+  area_verbose = area_verbose or false
+  pending_area = pending_area or nil
+  custom_pending = custom_pending or nil
+  mapper_debug = mapper_debug or false
+  last_room = last_room or nil
+  last_move_direction = last_move_direction or nil
+  current_room = current_room or nil
+  mapper_last_results = mapper_last_results or {}
+
+  -- Database ID
+  db_id = "erion_mapper_db"
+
+  function Trim(s)
+    if not s then return "" end
+    return (s:gsub("^%s*(.-)%s*$", "%1"))
+  end
+
+  -- ===== SQLITE DATABASE FUNCTIONS =====
+  
+  function db_path()
+    local world_dir = GetInfo(66) or ""
+    world_dir = world_dir:gsub("\\", "/")
+    if world_dir ~= "" and world_dir:sub(-1) ~= "/" then
+      world_dir = world_dir .. "/"
+    end
+    return world_dir .. "erion_map.db"
+  end
+
+  function db_init()
+    local path = db_path()
+    
+    Note("Attempting to open database: " .. path)
+    
+    local rc = DatabaseOpen(db_id, path)
+    
+    if rc ~= 0 then
+      Note("ERROR: Could not open database. Error code: " .. rc)
+      return false
+    end
+    
+    Note("Database opened successfully!")
+    
+    local schema_rc = DatabaseExec(db_id, [[
+      CREATE TABLE IF NOT EXISTS rooms (
+        uid TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        area TEXT NOT NULL DEFAULT 'erion_unknown'
+      );
+    ]])
+    
+    if schema_rc ~= 0 then
+      Note("ERROR: Failed to create rooms table! Error code: " .. schema_rc)
+      Note("Error message: " .. DatabaseError(db_id))
+      return false
+    end
+    
+    Note("Rooms table created/verified")
+    
+    schema_rc = DatabaseExec(db_id, [[
+      CREATE TABLE IF NOT EXISTS exits (
+        from_uid TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        to_uid TEXT NOT NULL,
+        is_locked INTEGER DEFAULT 0,
+        PRIMARY KEY (from_uid, direction)
+      );
+    ]])
+    
+    if schema_rc ~= 0 then
+      Note("ERROR: Failed to create exits table! Error code: " .. schema_rc)
+      Note("Error message: " .. DatabaseError(db_id))
+      return false
+    end
+    
+    Note("Exits table created/verified")
+    
+    -- NEW: Create notes table
+    schema_rc = DatabaseExec(db_id, [[
+      CREATE TABLE IF NOT EXISTS notes (
+        uid TEXT PRIMARY KEY,
+        note TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+    ]])
+    
+    if schema_rc ~= 0 then
+      Note("ERROR: Failed to create notes table! Error code: " .. schema_rc)
+      Note("Error message: " .. DatabaseError(db_id))
+      return false
+    end
+    
+    Note("Notes table created/verified")
+    
+    DatabaseExec(db_id, [[CREATE INDEX IF NOT EXISTS idx_exits_from ON exits(from_uid);]])
+    DatabaseExec(db_id, [[CREATE INDEX IF NOT EXISTS idx_exits_to ON exits(to_uid);]])
+    DatabaseExec(db_id, [[CREATE INDEX IF NOT EXISTS idx_exits_locked ON exits(is_locked);]])
+    DatabaseExec(db_id, [[CREATE INDEX IF NOT EXISTS idx_rooms_area ON rooms(area);]])
+    DatabaseExec(db_id, [[CREATE INDEX IF NOT EXISTS idx_rooms_name_lower ON rooms(LOWER(name));]])
+    
+    Note("Database initialization complete!")
+    
+    return true
+  end
+
+  function db_close()
+    DatabaseClose(db_id)
+  end
+
+  function db_count_rooms()
+    local count = 0
+    local stmt = DatabasePrepare(db_id, "SELECT COUNT(*) FROM rooms")
+    
+    if stmt then
+      local rc = DatabaseStep(db_id)
+      if rc == sqlite3.ROW then
+        count = DatabaseColumnValue(db_id, 1) or 0
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    if mapper_debug then
+      Note("DEBUG db_count_rooms: count = " .. tostring(count))
+    end
+    
+    return count
+  end
+
+  function db_get_room(uid)
+    local room = nil
+    local query = string.format("SELECT uid, name, area FROM rooms WHERE uid = %s", 
+        fixsql(uid))
+    
+    local stmt = DatabasePrepare(db_id, query)
+    
+    if stmt then
+      local rc = DatabaseStep(db_id)
+      
+      if rc == sqlite3.ROW then
+        room = {
+          uid = DatabaseColumnText(db_id, 1),
+          name = DatabaseColumnText(db_id, 2),
+          area = DatabaseColumnText(db_id, 3)
+        }
+      end
+      
+      DatabaseFinalize(db_id)
+    end
+    
+    return room
+  end
+
+  function db_get_room_name(uid)
+    local room = db_get_room(uid)
+    return room and room.name or nil
+  end
+
+  function db_set_room(uid, name, area)
+    if mapper_debug then
+      Note("=== db_set_room called ===")
+      Note("  uid: " .. tostring(uid) .. " (type: " .. type(uid) .. ")")
+      Note("  name: " .. tostring(name) .. " (type: " .. type(name) .. ")")
+      Note("  area: " .. tostring(area) .. " (type: " .. type(area) .. ")")
+    end
+    
+    local sql = string.format([[
+      INSERT OR REPLACE INTO rooms (uid, name, area) 
+      VALUES (%s, %s, %s)
+    ]], fixsql(uid), fixsql(name), fixsql(area))
+    
+    if mapper_debug then
+      Note("  SQL: " .. sql)
+    end
+    
+    local stmt = DatabasePrepare(db_id, sql)
+    
+    if not stmt then
+      Note("ERROR: Failed to prepare statement for db_set_room")
+      Note("  Database error: " .. tostring(DatabaseError(db_id)))
+      return false
+    end
+    
+    if mapper_debug then
+      Note("  Statement prepared successfully")
+    end
+    
+    local rc = DatabaseStep(db_id)
+    
+    if mapper_debug then
+      Note("  DatabaseStep return code: " .. tostring(rc))
+      Note("  Expected DONE code: " .. tostring(sqlite3.DONE))
+    end
+    
+    DatabaseFinalize(db_id)
+    
+    if mapper_debug then
+      Note("  Statement finalized")
+    end
+    
+    local success = (rc == sqlite3.DONE)
+    
+    if mapper_debug then
+      Note("  Result: " .. (success and "SUCCESS" or "FAILED"))
+      
+      if success then
+        local verify = DatabaseGetField(db_id, 
+          string.format("SELECT name FROM rooms WHERE uid = %s", fixsql(uid)), "")
+        Note("  Immediate verification: " .. tostring(verify))
+      end
+    end
+    
+    return success
+  end
+
+  function db_delete_room(uid)
+    local sql1 = string.format("DELETE FROM rooms WHERE uid = %s", fixsql(uid))
+    local sql2 = string.format("DELETE FROM exits WHERE to_uid = %s", fixsql(uid))
+    local sql3 = string.format("DELETE FROM notes WHERE uid = %s", fixsql(uid))
+    
+    DatabaseExec(db_id, sql1)
+    DatabaseExec(db_id, sql2)
+    DatabaseExec(db_id, sql3)
+    return true
+  end
+
+  function db_delete_area(area_name)
+    local count = 0
+    local uids = {}
+    
+    local query = string.format("SELECT uid FROM rooms WHERE LOWER(area) = LOWER(%s)", 
+        fixsql(area_name))
+    local stmt = DatabasePrepare(db_id, query)
+    
+    if stmt then
+      while DatabaseStep(db_id) == sqlite3.ROW do
+        table.insert(uids, DatabaseColumnText(db_id, 1))
+        count = count + 1
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    local sql = string.format("DELETE FROM rooms WHERE LOWER(area) = LOWER(%s)", 
+        fixsql(area_name))
+    DatabaseExec(db_id, sql)
+    
+    for _, uid in ipairs(uids) do
+      DatabaseExec(db_id, 
+        string.format("DELETE FROM exits WHERE to_uid = %s", fixsql(uid)))
+      DatabaseExec(db_id,
+        string.format("DELETE FROM notes WHERE uid = %s", fixsql(uid)))
+    end
+    
+    return count
+  end
+
+  function db_set_exit(from_uid, direction, to_uid, is_locked)
+    is_locked = is_locked and 1 or 0
+    
+    local sql = string.format([[
+      INSERT OR REPLACE INTO exits (from_uid, direction, to_uid, is_locked)
+      VALUES (%s, %s, %s, %d)
+    ]], fixsql(from_uid), fixsql(direction), fixsql(to_uid), is_locked)
+    
+    local stmt = DatabasePrepare(db_id, sql)
+    if not stmt then return false end
+    
+    local rc = DatabaseStep(db_id)
+    DatabaseFinalize(db_id)
+    
+    return (rc == sqlite3.DONE)
+  end
+
+  function db_get_exits(uid)
+    local exits = {}
+    local query = string.format("SELECT direction, to_uid, is_locked FROM exits WHERE from_uid = %s",
+        fixsql(uid))
+    
+    local stmt = DatabasePrepare(db_id, query)
+    
+    if stmt then
+      while DatabaseStep(db_id) == sqlite3.ROW do
+        local dir = DatabaseColumnText(db_id, 1)
+        exits[dir] = {
+          to_uid = DatabaseColumnText(db_id, 2),
+          is_locked = (DatabaseColumnValue(db_id, 3) == 1)
+        }
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    return exits
+  end
+
+  function db_delete_exit(from_uid, direction)
+    local sql = string.format("DELETE FROM exits WHERE from_uid = %s AND direction = %s",
+        fixsql(from_uid), fixsql(direction))
+    DatabaseExec(db_id, sql)
+    return true
+  end
+
+  function db_lock_exit(from_uid, direction)
+    local query = string.format("SELECT 1 FROM exits WHERE from_uid = %s AND direction = %s",
+        fixsql(from_uid), fixsql(direction))
+    
+    local exists = false
+    local stmt = DatabasePrepare(db_id, query)
+    if stmt then
+      if DatabaseStep(db_id) == sqlite3.ROW then
+        exists = true
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    if not exists then return false end
+    
+    local sql = string.format("UPDATE exits SET is_locked = 1 WHERE from_uid = %s AND direction = %s",
+        fixsql(from_uid), fixsql(direction))
+    DatabaseExec(db_id, sql)
+    return true
+  end
+
+  function db_unlock_exit(from_uid, direction)
+    local sql = string.format("UPDATE exits SET is_locked = 0 WHERE from_uid = %s AND direction = %s",
+        fixsql(from_uid), fixsql(direction))
+    DatabaseExec(db_id, sql)
+    return true
+  end
+
+  function db_set_room_exits(uid, exit_directions)
+    local existing = db_get_exits(uid)
+    
+    for _, dir in ipairs(exit_directions) do
+      if not existing[dir] then
+        db_set_exit(uid, dir, "-1", false)
+      end
+    end
+  end
+
+  function db_list_areas()
+    local areas = {}
+    local query = [[
+      SELECT area, COUNT(*) as count 
+      FROM rooms 
+      GROUP BY area 
+      ORDER BY count DESC, area ASC
+    ]]
+    
+    local stmt = DatabasePrepare(db_id, query)
+    
+    if stmt then
+      while DatabaseStep(db_id) == sqlite3.ROW do
+        table.insert(areas, {
+          name = DatabaseColumnText(db_id, 1),
+          count = DatabaseColumnValue(db_id, 2)
+        })
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    return areas
+  end
+
+  function db_find_rooms(name_fragment)
+    local results = {}
+    local pattern = "%" .. name_fragment .. "%"
+    local query = string.format([[
+      SELECT uid, name, area 
+      FROM rooms 
+      WHERE LOWER(name) LIKE LOWER(%s)
+      ORDER BY area, name, uid
+      LIMIT 100
+    ]], fixsql(pattern))
+    
+    local stmt = DatabasePrepare(db_id, query)
+    
+    if stmt then
+      while DatabaseStep(db_id) == sqlite3.ROW do
+        table.insert(results, {
+          uid = DatabaseColumnText(db_id, 1),
+          name = DatabaseColumnText(db_id, 2),
+          area = DatabaseColumnText(db_id, 3)
+        })
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    return results
+  end
+
+  -- ===== NOTES SYSTEM FUNCTIONS =====
+  
+  function db_set_note(uid, note_text)
+    local sql = string.format([[
+      INSERT OR REPLACE INTO notes (uid, note, created_at)
+      VALUES (%s, %s, CURRENT_TIMESTAMP)
+    ]], fixsql(uid), fixsql(note_text))
+    
+    local stmt = DatabasePrepare(db_id, sql)
+    if not stmt then return false end
+    
+    local rc = DatabaseStep(db_id)
+    DatabaseFinalize(db_id)
+    
+    return (rc == sqlite3.DONE)
+  end
+  
+  function db_get_note(uid)
+    local query = string.format("SELECT note FROM notes WHERE uid = %s", fixsql(uid))
+    local stmt = DatabasePrepare(db_id, query)
+    
+    local note_text = nil
+    if stmt then
+      if DatabaseStep(db_id) == sqlite3.ROW then
+        note_text = DatabaseColumnText(db_id, 1)
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    return note_text
+  end
+  
+  function db_delete_note(uid)
+    local sql = string.format("DELETE FROM notes WHERE uid = %s", fixsql(uid))
+    DatabaseExec(db_id, sql)
+    return true
+  end
+  
+  function db_get_area_notes(area_name)
+    local results = {}
+    local query = string.format([[
+      SELECT r.uid, r.name, r.area, n.note
+      FROM notes n
+      JOIN rooms r ON n.uid = r.uid
+      WHERE LOWER(r.area) = LOWER(%s)
+      ORDER BY r.name
+    ]], fixsql(area_name))
+    
+    local stmt = DatabasePrepare(db_id, query)
+    if stmt then
+      while DatabaseStep(db_id) == sqlite3.ROW do
+        table.insert(results, {
+          uid = DatabaseColumnText(db_id, 1),
+          room_name = DatabaseColumnText(db_id, 2),
+          area = DatabaseColumnText(db_id, 3),
+          note = DatabaseColumnText(db_id, 4)
+        })
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    return results
+  end
+  
+  function db_get_all_notes()
+    local results = {}
+    local query = [[
+      SELECT r.uid, r.name, r.area, n.note
+      FROM notes n
+      JOIN rooms r ON n.uid = r.uid
+      ORDER BY r.area, r.name
+    ]]
+    
+    local stmt = DatabasePrepare(db_id, query)
+    if stmt then
+      while DatabaseStep(db_id) == sqlite3.ROW do
+        table.insert(results, {
+          uid = DatabaseColumnText(db_id, 1),
+          room_name = DatabaseColumnText(db_id, 2),
+          area = DatabaseColumnText(db_id, 3),
+          note = DatabaseColumnText(db_id, 4)
+        })
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    return results
+  end
+  
+  function db_search_notes(search_text)
+    local results = {}
+    local pattern = "%" .. search_text .. "%"
+    local query = string.format([[
+      SELECT r.uid, r.name, r.area, n.note
+      FROM notes n
+      JOIN rooms r ON n.uid = r.uid
+      WHERE LOWER(n.note) LIKE LOWER(%s)
+      ORDER BY r.area, r.name
+    ]], fixsql(pattern))
+    
+    local stmt = DatabasePrepare(db_id, query)
+    if stmt then
+      while DatabaseStep(db_id) == sqlite3.ROW do
+        table.insert(results, {
+          uid = DatabaseColumnText(db_id, 1),
+          room_name = DatabaseColumnText(db_id, 2),
+          area = DatabaseColumnText(db_id, 3),
+          note = DatabaseColumnText(db_id, 4)
+        })
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    return results
+  end
+  
+  function show_note_current()
+    if not current_room then
+      Note("Cannot show note: current room unknown.")
+      return
+    end
+    
+    local room = db_get_room(current_room)
+    local note = db_get_note(current_room)
+    
+    if not note then
+      Note("No note for room " .. (room and room.name or "unknown") .. " (" .. current_room .. ")")
+      return
+    end
+    
+    Note("================================================================================")
+    Note("NOTE: " .. (room and room.name or "unknown") .. " (" .. current_room .. ")")
+    Note("================================================================================")
+    Note(note)
+    Note("================================================================================")
+  end
+  
+  function delete_note_current()
+    if not current_room then
+      Note("Cannot delete note: current room unknown.")
+      return
+    end
+    
+    local room = db_get_room(current_room)
+    local note = db_get_note(current_room)
+    
+    if not note then
+      Note("No note to delete in room " .. (room and room.name or "unknown"))
+      return
+    end
+    
+    db_delete_note(current_room)
+    Note("Note deleted from room " .. (room and room.name or "unknown") .. " (" .. current_room .. ")")
+  end
+  
+  function list_notes_area()
+    if not current_room then
+      Note("Cannot list notes: current room unknown.")
+      return
+    end
+    
+    local room = db_get_room(current_room)
+    if not room then
+      Note("Current room not in database.")
+      return
+    end
+    
+    local notes = db_get_area_notes(room.area)
+    
+    if #notes == 0 then
+      Note("No notes found in area: " .. room.area)
+      return
+    end
+    
+    Note("================================================================================")
+    Note("NOTES IN AREA: " .. room.area)
+    Note("================================================================================")
+    for _, n in ipairs(notes) do
+      Note(string.format("[%s] %s", n.uid, n.room_name))
+      Note("  Note: " .. n.note)
+    end
+    Note("================================================================================")
+    Note("Total notes: " .. #notes)
+  end
+  
+  function list_notes_all()
+    local notes = db_get_all_notes()
+    
+    if #notes == 0 then
+      Note("No notes found in database.")
+      return
+    end
+    
+    Note("================================================================================")
+    Note("ALL NOTES")
+    Note("================================================================================")
+    local current_area = nil
+    for _, n in ipairs(notes) do
+      if n.area ~= current_area then
+        if current_area then Note("") end
+        Note("--- " .. n.area .. " ---")
+        current_area = n.area
+      end
+      Note(string.format("[%s] %s", n.uid, n.room_name))
+      Note("  Note: " .. n.note)
+    end
+    Note("================================================================================")
+    Note("Total notes: " .. #notes)
+  end
+
+  function fixsql(s)
+    if not s then return "NULL" end
+    s = tostring(s)
+    s = s:gsub("'", "''")
+    return "'" .. s .. "'"
+  end
+
+  -- ===== ROOM PROCESSING FUNCTIONS =====
+  
+  function process_room_header(name, line, wildcards)
+    local area_name = Trim(wildcards[1] or "")
+    local room_and_extras = Trim(wildcards[2] or "")
+    local room_id = Trim(wildcards[3] or "")
+
+    local room_name = room_and_extras:match("^(.-)%s*%(") or room_and_extras
+    room_name = Trim(room_name)
+
+    if mapper_debug then
+      Note("================================================================================")
+      Note("Mapper DEBUG: ROOM HEADER DETECTED (with area)")
+      Note("  Raw line: " .. tostring(line))
+      Note("  Area captured: '" .. area_name .. "'")
+      Note("  Room name extracted: '" .. room_name .. "'")
+      Note("  Room ID captured: '" .. room_id .. "'")
+      Note("================================================================================")
+    end
+
+    handle_room_entry(room_id, room_name, area_name)
+  end
+
+  function process_room_header_no_area(name, line, wildcards)
+    local room_and_extras = Trim(wildcards[1] or "")
+    local room_id = Trim(wildcards[2] or "")
+
+    local room_name = room_and_extras:match("^(.-)%s*%(") or room_and_extras
+    room_name = Trim(room_name)
+
+    local area_to_use = pending_area
+    if not area_to_use then
+      local existing = db_get_room(room_id)
+      if existing then
+        area_to_use = existing.area
+      end
+    end
+    area_to_use = area_to_use or "erion_unknown"
+
+    if mapper_debug then
+      Note("================================================================================")
+      Note("Mapper DEBUG: ROOM HEADER DETECTED (no area prefix)")
+      Note("  Raw line: " .. tostring(line))
+      Note("  Room name extracted: '" .. room_name .. "'")
+      Note("  Room ID captured: '" .. room_id .. "'")
+      Note("  Area being used: '" .. area_to_use .. "'")
+      Note("================================================================================")
+    end
+
+    handle_room_entry(room_id, room_name, area_to_use)
+  end
+
+  function handle_room_entry(room_id, room_name, area_name)
+    current_room = tostring(room_id)
+    SetVariable("current_room", current_room)
+    
+    if custom_pending and custom_pending.from and custom_pending.cmd then
+      local from = tostring(custom_pending.from)
+      local cmdkey = "cmd:" .. custom_pending.cmd
+      
+      db_set_exit(from, cmdkey, current_room, false)
+      
+      if mapper_debug then
+        Note("================================================================================")
+        Note(string.format("CUSTOM EXIT SAVED: %s -> %s", from, current_room))
+        Note(string.format("Command key: %s", cmdkey))
+        Note("================================================================================")
+      end
+      custom_pending = nil
+    end
+    
+    local existing = db_get_room(current_room)
+    local is_new_room = not existing
+    
+    local success = db_set_room(current_room, room_name, area_name)
+    
+    if not success and mapper_debug then
+      Note("WARNING: Failed to save room to database!")
+    end
+    
+    if is_new_room then
+      if mapper_debug or area_verbose then
+        Note("--------------------------------------------------------------------------------")
+        Note("NEW ROOM CREATED:")
+        Note("  Room ID: " .. room_id)
+        Note("  Room Name: '" .. room_name .. "'")
+        Note("  Area: '" .. area_name .. "'")
+        Note("--------------------------------------------------------------------------------")
+      end
+    elseif mapper_debug or area_verbose then
+      local name_changed = (existing.name ~= room_name)
+      local area_changed = (existing.area ~= area_name)
+      
+      if name_changed or area_changed then
+        Note("--------------------------------------------------------------------------------")
+        Note("ROOM UPDATED:")
+        Note("  Room ID: " .. room_id)
+        if name_changed then
+          Note("  Name changed: '" .. existing.name .. "' -> '" .. room_name .. "'")
+        end
+        if area_changed then
+          Note("  Area changed: '" .. existing.area .. "' -> '" .. area_name .. "'")
+        end
+        Note("--------------------------------------------------------------------------------")
+      end
+    end
+
+    if last_room and last_move_direction and last_room ~= current_room then
+      local rev = { north = "south", south = "north", east = "west", west = "east", up = "down", down = "up" }
+      local dir = last_move_direction
+      
+      db_set_exit(last_room, dir, current_room, false)
+      
+      if mapper_debug then
+        local prev_name = db_get_room_name(last_room) or "unknown"
+        Note(string.format("Mapper DEBUG: EXIT LINK: %s (%s) --%s--> %s (%s)", 
+          prev_name, last_room, dir, room_name, current_room))
+      end
+    end
+
+    last_room = current_room
+    last_move_direction = nil
+    pending_area = nil
+    
+    -- Display note if one exists for this room
+    local note = db_get_note(current_room)
+    if note then
+      ColourNote("yellow", "", "=================================================")
+      ColourNote("yellow", "", "ROOM NOTE: " .. note)
+      ColourNote("yellow", "", "=================================================")
+    end
+    
+    if mapper and mapper.draw then 
+      mapper.draw(current_room)
+    end
+  end
+
+  -- ===== UTILITY FUNCTIONS =====
+
+  function show_this_room()
+    if not current_room then
+      Note("Mapper: No current room information available.")
+      return
+    end
+    
+    local room = db_get_room(current_room)
+    if not room then
+      Note("Mapper: Current room not in database.")
+      return
+    end
+    
+    local exits = db_get_exits(current_room)
+    local exlist = {}
+    for dir, _ in pairs(exits) do
+      table.insert(exlist, dir)
+    end
+    table.sort(exlist)
+    
+    Note(string.format("Mapper: at %s (%s), area: %s, exits: %s",
+      room.name, current_room, room.area, table.concat(exlist, ", ")))
+  end
+
+  function get_database()
+    local path = db_path()
+    local count = db_count_rooms()
+    
+    local f = io.open(path, "r")
+    local size = 0
+    if f then
+      size = f:seek("end")
+      f:close()
+    end
+    
+    local size_kb = math.floor(size / 1024)
+    
+    Note("================================================================================")
+    Note("DATABASE INFO")
+    Note("================================================================================")
+    Note("Path: " .. path)
+    Note("Rooms: " .. count)
+    Note("Size: " .. size_kb .. " KB")
+    Note("Type: SQLite")
+    Note("================================================================================")
+  end
+
+  function show_stats()
+    local room_count = db_count_rooms()
+    local exit_count = 0
+    local locked_count = 0
+    local custom_count = 0
+    local note_count = 0
+    
+    local stmt = DatabasePrepare(db_id, "SELECT COUNT(*) FROM exits")
+    if stmt then
+      if DatabaseStep(db_id) == sqlite3.ROW then
+        exit_count = DatabaseColumnValue(db_id, 1) or 0
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    stmt = DatabasePrepare(db_id, "SELECT COUNT(*) FROM exits WHERE is_locked = 1")
+    if stmt then
+      if DatabaseStep(db_id) == sqlite3.ROW then
+        locked_count = DatabaseColumnValue(db_id, 1) or 0
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    stmt = DatabasePrepare(db_id, "SELECT COUNT(*) FROM exits WHERE direction LIKE 'cmd:%'")
+    if stmt then
+      if DatabaseStep(db_id) == sqlite3.ROW then
+        custom_count = DatabaseColumnValue(db_id, 1) or 0
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    stmt = DatabasePrepare(db_id, "SELECT COUNT(*) FROM notes")
+    if stmt then
+      if DatabaseStep(db_id) == sqlite3.ROW then
+        note_count = DatabaseColumnValue(db_id, 1) or 0
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    local areas = db_list_areas()
+    
+    Note("================================================================================")
+    Note("MAPPER STATISTICS")
+    Note("================================================================================")
+    Note("Total Rooms: " .. room_count)
+    Note("Total Exits: " .. exit_count)
+    Note("Locked Exits: " .. locked_count)
+    Note("Custom Exits: " .. custom_count)
+    Note("Total Notes: " .. note_count)
+    Note("Total Areas: " .. #areas)
+    Note("================================================================================")
+  end
+
+  mapper = mapper or {}
+  if not mapper.draw then
+    function mapper.draw(r)
+    end
+  end
+  
+  function GetMapperRooms()
+    local rooms_table = {}
+    local stmt = DatabasePrepare(db_id, "SELECT uid FROM rooms")
+    
+    if stmt then
+      while DatabaseStep(db_id) == sqlite3.ROW do
+        local uid = DatabaseColumnText(db_id, 1)
+        local room = db_get_room(uid)
+        local exits = db_get_exits(uid)
+        
+        rooms_table[uid] = {
+          uid = uid,
+          name = room.name,
+          area = room.area,
+          exits = {},
+          exit_locks = {}
+        }
+        
+        for dir, exit_data in pairs(exits) do
+          rooms_table[uid].exits[dir] = exit_data.to_uid
+          if exit_data.is_locked then
+            rooms_table[uid].exit_locks[dir] = true
+          end
+        end
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    return rooms_table
+  end
+  
+  function GetCurrentRoom()
+    return current_room
+  end
+
+  function check_path_integrity()
+    if not current_room then
+      Note("Current room unknown. Move to a room first.")
+      return
+    end
+    
+    local room = db_get_room(current_room)
+    if not room then
+      Note("Current room not in database.")
+      return
+    end
+    
+    Note("=== Checking exits from " .. room.name .. " (" .. current_room .. ") ===")
+    local rev = { north = "south", south = "north", east = "west", west = "east", up = "down", down = "up" }
+    
+    local exits = db_get_exits(current_room)
+    for dir, exit_data in pairs(exits) do
+      local dest_uid = exit_data.to_uid
+      if dest_uid ~= "-1" then
+        local dest = db_get_room(dest_uid)
+        if dest then
+          local rev_dir = rev[dir]
+          local dest_exits = db_get_exits(dest_uid)
+          local has_reverse = dest_exits[rev_dir] and dest_exits[rev_dir].to_uid == current_room
+          
+          local status = has_reverse and "OK" or "MISSING REVERSE"
+          if exit_data.is_locked then
+            status = status .. " [LOCKED]"
+          end
+          
+          Note(string.format("  %s -> %s (%s) %s", dir, dest.name, dest_uid, status))
+          
+          if not has_reverse and rev_dir then
+            Note(string.format("    Missing: %s should have '%s' back to here", dest_uid, rev_dir))
+          end
+        else
+          Note(string.format("  %s -> %s [BROKEN - room not found]", dir, dest_uid))
+        end
+      else
+        Note(string.format("  %s -> [unexplored]", dir))
+      end
+    end
+  end
+
+  function list_custom_exits_here()
+    if not current_room then
+      Note("Current room unknown.")
+      return
+    end
+    
+    local room = db_get_room(current_room)
+    if not room then
+      Note("Current room not in database.")
+      return
+    end
+    
+    local exits = db_get_exits(current_room)
+    local cexits = {}
+    
+    for dir, exit_data in pairs(exits) do
+      if dir:sub(1, 4) == "cmd:" then
+        local cmd = dir:sub(5)
+        local dest = db_get_room(exit_data.to_uid)
+        table.insert(cexits, {
+          cmd = cmd,
+          dest_uid = exit_data.to_uid,
+          dest_name = dest and dest.name or "unknown"
+        })
+      end
+    end
+    
+    if #cexits == 0 then
+      Note("No custom exits in current room: " .. room.name)
+      return
+    end
+    
+    Note("================================================================================")
+    Note("Custom exits from: " .. room.name .. " (" .. current_room .. ")")
+    Note("================================================================================")
+    for _, ex in ipairs(cexits) do
+      Note(string.format("  '%s' -> %s (ID: %s)", ex.cmd, ex.dest_name, ex.dest_uid))
+    end
+    Note("================================================================================")
+  end
+
+  function list_all_custom_exits()
+    if not current_room then
+      Note("Current room unknown.")
+      return
+    end
+    
+    local current_area = db_get_room(current_room)
+    if not current_area then
+      Note("Current area unknown.")
+      return
+    end
+    current_area = current_area.area
+    
+    local area_cexits = {}
+    local query = string.format("SELECT uid FROM rooms WHERE area = %s", fixsql(current_area))
+    local stmt = DatabasePrepare(db_id, query)
+    
+    if stmt then
+      while DatabaseStep(db_id) == sqlite3.ROW do
+        local uid = DatabaseColumnText(db_id, 1)
+        local room = db_get_room(uid)
+        local exits = db_get_exits(uid)
+        
+        for dir, exit_data in pairs(exits) do
+          if dir:sub(1, 4) == "cmd:" then
+            local cmd = dir:sub(5)
+            local dest = db_get_room(exit_data.to_uid)
+            table.insert(area_cexits, {
+              from_uid = uid,
+              from_name = room.name,
+              cmd = cmd,
+              dest_uid = exit_data.to_uid,
+              dest_name = dest and dest.name or "unknown"
+            })
+          end
+        end
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    if #area_cexits == 0 then
+      Note("No custom exits found in area: " .. current_area)
+      return
+    end
+    
+    table.sort(area_cexits, function(a, b) return a.from_name < b.from_name end)
+    
+    Note("================================================================================")
+    Note("Custom exits in area: " .. current_area .. " (" .. #area_cexits .. " total)")
+    Note("================================================================================")
+    for _, ex in ipairs(area_cexits) do
+      Note(string.format("  [%s] %s", ex.from_uid, ex.from_name))
+      Note(string.format("    '%s' -> %s (ID: %s)", ex.cmd, ex.dest_name, ex.dest_uid))
+    end
+    Note("================================================================================")
+  end
+
+  function list_locked_exits_here()
+    if not current_room then
+      Note("Current room unknown.")
+      return
+    end
+    
+    local room = db_get_room(current_room)
+    if not room then
+      Note("Current room not in database.")
+      return
+    end
+    
+    local exits = db_get_exits(current_room)
+    local locked = {}
+    
+    for dir, exit_data in pairs(exits) do
+      if exit_data.is_locked then
+        local dest = db_get_room(exit_data.to_uid)
+        table.insert(locked, {
+          dir = dir,
+          dest_uid = exit_data.to_uid,
+          dest_name = dest and dest.name or "unknown"
+        })
+      end
+    end
+    
+    if #locked == 0 then
+      Note("No locked exits in current room.")
+      return
+    end
+    
+    Note("================================================================================")
+    Note("Locked exits from: " .. room.name .. " (" .. current_room .. ")")
+    Note("================================================================================")
+    for _, ex in ipairs(locked) do
+      Note(string.format("  %s -> %s (ID: %s)", ex.dir, ex.dest_name, ex.dest_uid))
+    end
+    Note("================================================================================")
+  end
+
+  function list_all_locked_exits()
+    if not current_room then
+      Note("Current room unknown.")
+      return
+    end
+    
+    local current_area = db_get_room(current_room)
+    if not current_area then
+      Note("Current area unknown.")
+      return
+    end
+    current_area = current_area.area
+    
+    local area_locked = {}
+    local query = string.format("SELECT uid FROM rooms WHERE area = %s", fixsql(current_area))
+    local stmt = DatabasePrepare(db_id, query)
+    
+    if stmt then
+      while DatabaseStep(db_id) == sqlite3.ROW do
+        local uid = DatabaseColumnText(db_id, 1)
+        local room = db_get_room(uid)
+        local exits = db_get_exits(uid)
+        
+        for dir, exit_data in pairs(exits) do
+          if exit_data.is_locked then
+            local dest = db_get_room(exit_data.to_uid)
+            table.insert(area_locked, {
+              from_uid = uid,
+              from_name = room.name,
+              dir = dir,
+              dest_uid = exit_data.to_uid,
+              dest_name = dest and dest.name or "unknown"
+            })
+          end
+        end
+      end
+      DatabaseFinalize(db_id)
+    end
+    
+    if #area_locked == 0 then
+      Note("No locked exits found in area: " .. current_area)
+      return
+    end
+    
+    table.sort(area_locked, function(a, b) return a.from_name < b.from_name end)
+    
+    Note("================================================================================")
+    Note("Locked exits in area: " .. current_area .. " (" .. #area_locked .. " total)")
+    Note("================================================================================")
+    for _, ex in ipairs(area_locked) do
+      Note(string.format("  [%s] %s", ex.from_uid, ex.from_name))
+      Note(string.format("    %s -> %s (ID: %s)", ex.dir, ex.dest_name, ex.dest_uid))
+    end
+    Note("================================================================================")
+  end
+
+  -- ===== PATHFINDING =====
+
+  local dir_short = { north='n', south='s', east='e', west='w', up='u', down='d' }
+
+  function path_bfs(start_uid, goal_uid)
+    if not start_uid or not goal_uid or start_uid == goal_uid then return {} end
+    
+    local q = {start_uid}
+    local visited = {[start_uid] = true}
+    local parent = {}
+    
+    while #q > 0 do
+      local cur = table.remove(q, 1)
+      local exits = db_get_exits(cur)
+      
+      for dir, exit_data in pairs(exits) do
+        local to = exit_data.to_uid
+        if not exit_data.is_locked and to and to ~= "-1" then
+          if not visited[to] then
+            visited[to] = true
+            parent[to] = {prev=cur, dir=dir}
+            
+            if to == goal_uid then
+              local path = {}
+              local t = goal_uid
+              while t and parent[t] do
+                table.insert(path, 1, parent[t].dir)
+                t = parent[t].prev
+              end
+              return path
+            end
+            
+            table.insert(q, to)
+          end
+        end
+      end
+    end
+    
+    return nil
+  end
+
+  function walk_path(dirs)
+    if not dirs or #dirs == 0 then return end
+    
+    local command_groups = {}
+    local current_group = {}
+    
+    for _, current_dir in ipairs(dirs) do
+      if type(current_dir) == "string" and current_dir:sub(1,4) == "cmd:" then
+        if #current_group > 0 then
+          table.insert(command_groups, {type = "run", dirs = current_group})
+          current_group = {}
+        end
+        
+        local cmd_string = current_dir:sub(5)
+        local commands = {}
+        for part in cmd_string:gmatch("[^,]+") do
+          local trimmed = Trim(part)
+          if trimmed ~= "" then
+            table.insert(commands, trimmed)
+          end
+        end
+        
+        for _, cmd in ipairs(commands) do
+          table.insert(command_groups, {type = "custom", cmd = cmd})
+        end
+      else
+        table.insert(current_group, current_dir)
+      end
+    end
+    
+    if #current_group > 0 then
+      table.insert(command_groups, {type = "run", dirs = current_group})
+    end
+    
+    local commands = {}
+    for _, group in ipairs(command_groups) do
+      if group.type == "custom" then
+        table.insert(commands, group.cmd)
+      else
+        local speedwalk_parts = {}
+        local i = 1
+        local group_dirs = group.dirs
+        
+        while i <= #group_dirs do
+          local short_dir = dir_short[group_dirs[i]] or group_dirs[i]:sub(1,1)
+          local count = 1
+          
+          while i + count <= #group_dirs do
+            local next_short = dir_short[group_dirs[i + count]] or group_dirs[i + count]:sub(1,1)
+            if next_short ~= short_dir then break end
+            count = count + 1
+          end
+          
+          if count > 1 then
+            table.insert(speedwalk_parts, count .. short_dir)
+          else
+            table.insert(speedwalk_parts, short_dir)
+          end
+          
+          i = i + count
+        end
+        
+        table.insert(commands, "run " .. table.concat(speedwalk_parts, ""))
+      end
+    end
+    
+    if mapper_debug then
+      Note("================================================================================")
+      Note("Mapper DEBUG: SPEEDWALK")
+      Note("  Original path: " .. table.concat(dirs, ", "))
+      Note("  Optimized commands:")
+      for i, cmd in ipairs(commands) do
+        Note("    " .. i .. ". " .. cmd)
+      end
+      Note("================================================================================")
+    end
+    
+    for i, cmd in ipairs(commands) do
+      DoAfterSpecial(0.5 * i, cmd, sendto.execute)
+    end
+  end
+
+  function map_find(name, line, wildcards)
+    local phrase = Trim(wildcards[1] or "")
+    if phrase == "" then
+      Note("Usage: mapper find [room name fragment]")
+      return
+    end
+
+    mapper_last_results = db_find_rooms(phrase)
+    local count = #mapper_last_results
+
+    if count == 0 then
+      Note(string.format("No rooms found matching '%s'.", phrase))
+      return
+    end
+
+    Note("+------------------------------ START OF SEARCH -------------------------------+")
+    for i, r in ipairs(mapper_last_results) do
+      local line_text = string.format("[#%d] (%s) %s  -  area: %s", i, r.uid, r.name, r.area)
+      Hyperlink(string.format("mapper goto #%d", i), line_text, "Click to walk here", "", "", false, true)
+      print("")
+      if i >= 100 then break end
+    end
+    Note("+-------------------------------- END OF SEARCH -------------------------------+")
+  end
+
+  function map_goto(name, line, wildcards)
+    local arg = Trim(wildcards[1] or "")
+    if arg == "" then
+      Note("Usage: mapper goto [uid]  OR  mapper goto #[index-from-find]")
+      return
+    end
+
+    local target_uid
+    local idx = arg:match("^#(%d+)$")
+    if idx then
+      idx = tonumber(idx)
+      if mapper_last_results[idx] then
+        target_uid = mapper_last_results[idx].uid
+      else
+        Note(string.format("mapper goto: invalid index #%d.", idx))
+        return
+      end
+    else
+      target_uid = arg
+    end
+
+    if not current_room then
+      Note("mapper goto: current room unknown.")
+      return
+    end
+
+    if not db_get_room(target_uid) then
+      Note(string.format("No path known to room %s.", target_uid))
+      return
+    end
+
+    local dirs = path_bfs(current_room, target_uid)
+    if not dirs then
+      if target_uid == current_room then
+        Note("mapper goto: already here.")
+      else
+        Note(string.format("No path from %s to %s.", current_room, target_uid))
+      end
+      return
+    end
+
+    if #dirs == 0 then
+      Note("mapper goto: already here.")
+      return
+    end
+
+    Note("Speedwalking: " .. table.concat(dirs, ", "))
+    walk_path(dirs)
+  end
+
+  function mapper_help()
+    Note(GetPluginInfo(GetPluginID(), 3))
+  end
+
+  -- ===== PLUGIN LIFECYCLE =====
+
+  function OnPluginInstall()
+    if db_init() then
+      local count = db_count_rooms()
+      Note("================================================================================")
+      Note("Erion Mapper v2.3 - WITH NOTES SYSTEM")
+      Note("Loaded " .. count .. " rooms from database")
+      Note("Database: " .. db_path())
+      Note("Type 'mapper help' for commands")
+      Note("Type 'mapper debug on' to see detailed capture information")
+      Note("================================================================================")
+    else
+      Note("ERROR: Failed to initialize database!")
+    end
+  end
+
+  function OnPluginSaveState()
+  end
+
+  function OnPluginClose()
+    db_close()
+  end
+
+  function OnPluginDisable()
+    db_close()
+  end
+  ]]>
+  </script>
+
+</muclient>
