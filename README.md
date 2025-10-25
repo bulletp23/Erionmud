@@ -10,7 +10,9 @@ Erion Quest Tracker
  - Added scanning for mobs / junkyard items
 
 Erion Mapper Display
+ - Update to run with new mapper and .db
 
-Erion Mapper - erion_mapper_clean
- - Text based mapper for Erion mud
- - Requires the erion_map.lua to be installed in your main foldier (the one that contains all the main foldiers and the mushclient EXE)
+Erion Mapper 
+ - Updated to to use the .db for better collection and speed
+ - Requires the erion_map.db to be installed in your main foldier (the one that contains all the main foldiers and the mushclient EXE)
+ - If you do not install the .db it should auto create
